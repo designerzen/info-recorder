@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.tmp-audio-tests/
+public/supertonic/assets/onnx/*.onnx
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js

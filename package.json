@@ -1,0 +1,30 @@
+{
+  "name": "info-recorder",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "test:audio": "tsc -p tsconfig.audio-test.json && node --test scripts/audioUtils.test.mjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "@huggingface/transformers": "^4.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "fft.js": "^4.0.4",
+    "jassub": "^2.5.1",
+    "lucide-react": "^0.511.0",
+    "onnxruntime-web": "^1.26.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0"
+  }
+}

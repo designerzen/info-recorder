@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": false,
+    "outDir": ".tmp-audio-tests"
+  },
+  "include": ["src/recorder/audioUtils.ts"]
+}
