@@ -59,6 +59,22 @@ describe("SimpleSettings regressions", () => {
     expect(onUpdate).toHaveBeenCalledWith(vadOption, "fixed-rms");
   });
 
+  it("shows the Whisper model cards and forwards changes", async () => {
+    const user = userEvent.setup();
+    const settings = cloneRuntimeSettings(defaultRuntimeSettings);
+    const onUpdate = vi.fn();
+    renderSettings({ settings, onUpdate });
+
+    expect(screen.getByText("Each option includes its language coverage and why you would pick it.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: /Whisper Base.*English only/i }));
+
+    const modelOption = settingsOptions.find(
+      (option) => option.key === "transcriptionModel"
+    ) as SettingsOption;
+    expect(onUpdate).toHaveBeenCalledWith(modelOption, "onnx-community/whisper-base.en");
+  });
+
   it("disables OPFS recording controls when storage is unavailable", () => {
     const settings = cloneRuntimeSettings(defaultRuntimeSettings);
     settings.recording.shouldRecordToOpfs = true;
