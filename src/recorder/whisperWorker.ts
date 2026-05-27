@@ -3,14 +3,16 @@ import type {
   AllTasks,
   AutomaticSpeechRecognitionOutput,
 } from "@huggingface/transformers";
-import { appSettings } from "../config/settings";
+import { appSettings, type AppSettings } from "../config/settings";
 import { clampProgress, ModelDownloadTracker } from "./modelDownloadTracker";
 import { resampleLinear } from "./audioUtils";
+import { withTimeout } from "./asyncTimeout";
 
 type AutomaticSpeechRecognitionPipelineType = AllTasks["automatic-speech-recognition"];
 type AudioSamples = Float32Array<ArrayBuffer>;
 
 type InboundMessage =
+  | { type: "configure"; transcription: AppSettings["transcription"] }
   | { type: "load" }
   | { type: "cache-status" }
   | { type: "warm-cache" }
@@ -23,14 +25,13 @@ type InboundMessage =
       startsNewParagraph: boolean;
     };
 
-const MODEL_ID = appSettings.transcription.modelId;
 const TASK = "automatic-speech-recognition";
 const CACHE_NAME = "info-recorder-transformers-cache";
 const WHISPER_CONTEXT_SECONDS = 30;
 const WHISPER_STRIDE_SECONDS = 5;
 const SHORT_AUDIO_DIRECT_SECONDS = 12;
+const TRANSCRIPTION_TIMEOUT_MS = 180_000;
 const PIPELINE_OPTIONS = {
-  device: appSettings.transcription.device,
   dtype: {
     encoder_model: "fp32",
     decoder_model_merged: "fp32"
@@ -50,9 +51,15 @@ let loadingPromise: Promise<AutomaticSpeechRecognitionPipelineType> | null = nul
 let queue = Promise.resolve();
 let overallProgress = 0;
 let downloadTracker: ModelDownloadTracker | null = null;
+let transcriptionSettings: AppSettings["transcription"] = { ...appSettings.transcription };
 const defaultFetch = env.fetch;
 
 self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
+  if (data.type === "configure") {
+    applyTranscriptionSettings(data.transcription);
+    return;
+  }
+
   if (data.type === "cache-status") {
     void postCacheStatus();
     return;
@@ -94,8 +101,8 @@ async function load() {
     overallProgress = status.cached ? 100 : downloadTracker?.getProgress() ?? 0;
     postCacheStatusMessage(status);
     env.fetch = createWorkerFetch();
-    loadingPromise = pipeline(TASK, MODEL_ID, {
-      ...PIPELINE_OPTIONS,
+    loadingPromise = pipeline(TASK, transcriptionSettings.modelId, {
+      ...getPipelineOptions(),
       progress_callback: (event: unknown) => {
         postMessage({ type: "progress", ...describeProgress(event) });
       }
@@ -114,10 +121,16 @@ async function transcribe(message: Extract<InboundMessage, { type: "transcribe" 
     message.sampleRate === 16000 ? message.audio : resampleLinear(message.audio, message.sampleRate, 16000);
   const durationSeconds = audio.length / 16000;
 
-  const result = await recognizer(audio, {
-    ...getGenerationOptions(),
-    ...getChunkingOptions(durationSeconds)
-  });
+  const result = await withTimeout(
+    recognizer(audio, {
+      ...getGenerationOptions(),
+      ...getChunkingOptions(durationSeconds)
+    }),
+    TRANSCRIPTION_TIMEOUT_MS,
+    `Whisper did not finish a ${durationSeconds.toFixed(1)}s audio chunk within ${Math.round(
+      TRANSCRIPTION_TIMEOUT_MS / 1000
+    )} seconds. Try a smaller Whisper model or a shorter media file.`
+  );
 
   const output = result as AutomaticSpeechRecognitionOutput | AutomaticSpeechRecognitionOutput[];
   const text = Array.isArray(output) ? output.map((item) => item.text).join(" ") : output.text;
@@ -150,11 +163,11 @@ function describeProgress(event: unknown) {
 }
 
 function getGenerationOptions() {
-  if (!appSettings.transcription.isMultilingual) return {};
+  if (!transcriptionSettings.isMultilingual) return {};
 
   return {
-    language: appSettings.transcription.language,
-    task: appSettings.transcription.task
+    language: transcriptionSettings.language,
+    task: transcriptionSettings.task
   };
 }
 
@@ -213,7 +226,11 @@ function formatWorkerError(cause: unknown, fallback: string) {
 }
 
 async function inspectCacheStatus() {
-  const status = await ModelRegistry.is_pipeline_cached_files(TASK, MODEL_ID, PIPELINE_OPTIONS);
+  const status = await ModelRegistry.is_pipeline_cached_files(
+    TASK,
+    transcriptionSettings.modelId,
+    getPipelineOptions()
+  );
   return {
     cached: status.allCached,
     cachedFiles: status.files.filter((file) => file.cached).length,
@@ -237,11 +254,20 @@ function postCacheStatusMessage(status: {
 
 async function prepareDownloadTracker(status?: Awaited<ReturnType<typeof inspectCacheStatus>>) {
   const cacheStatus = status ?? (await inspectCacheStatus());
-  const files = await ModelRegistry.get_pipeline_files(TASK, MODEL_ID, PIPELINE_OPTIONS);
+  const pipelineOptions = getPipelineOptions();
+  const files = await ModelRegistry.get_pipeline_files(
+    TASK,
+    transcriptionSettings.modelId,
+    pipelineOptions
+  );
   const metadata = await Promise.all(
     files.map(async (file) => ({
       file,
-      metadata: await ModelRegistry.get_file_metadata(MODEL_ID, file, PIPELINE_OPTIONS as never)
+      metadata: await ModelRegistry.get_file_metadata(
+        transcriptionSettings.modelId,
+        file,
+        pipelineOptions as never
+      )
     }))
   );
   const cachedFiles = new Set(
@@ -250,7 +276,7 @@ async function prepareDownloadTracker(status?: Awaited<ReturnType<typeof inspect
 
   return new ModelDownloadTracker(
     metadata.map(({ file, metadata: fileMetadata }) => ({
-      url: buildRemoteUrl(MODEL_ID, file),
+      url: buildRemoteUrl(transcriptionSettings.modelId, file),
       size: fileMetadata.size ?? 0,
       cached: cachedFiles.has(file)
     }))
@@ -283,9 +309,42 @@ function shouldTrackRequest(request: Request) {
 function isTrackedRemoteModelUrl(url: string) {
   const remotePrefix = `${env.remoteHost.replace(/\/+$/, "")}/`;
   const expectedModelPath = env.remotePathTemplate
-    .replaceAll("{model}", MODEL_ID)
+    .replaceAll("{model}", transcriptionSettings.modelId)
     .replaceAll("{revision}", encodeURIComponent("main"));
   return url.startsWith(`${remotePrefix}${expectedModelPath}`);
+}
+
+function getPipelineOptions() {
+  return {
+    ...PIPELINE_OPTIONS,
+    device: transcriptionSettings.device
+  } as const;
+}
+
+function applyTranscriptionSettings(nextSettings: AppSettings["transcription"]) {
+  if (areTranscriptionSettingsEqual(transcriptionSettings, nextSettings)) {
+    return;
+  }
+
+  transcriptionSettings = { ...nextSettings };
+  transcriber = null;
+  loadingPromise = null;
+  downloadTracker = null;
+  overallProgress = 0;
+}
+
+function areTranscriptionSettingsEqual(
+  left: AppSettings["transcription"],
+  right: AppSettings["transcription"]
+) {
+  return (
+    left.modelId === right.modelId &&
+    left.device === right.device &&
+    left.isMultilingual === right.isMultilingual &&
+    left.language === right.language &&
+    left.task === right.task &&
+    left.cacheModelOnFirstUse === right.cacheModelOnFirstUse
+  );
 }
 
 function fetchWithXhr(request: Request) {

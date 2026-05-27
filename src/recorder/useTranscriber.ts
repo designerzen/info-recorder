@@ -14,7 +14,7 @@ import type { RuntimeSettings } from "../config/settingsOptions";
 import { concatAudio, getRms, toMono } from "./audioUtils";
 import { exportRecordingBlob, getRecordingExportExtension } from "./audioExport";
 import { detectVoiceActivity, type AdaptiveVadState, type VoiceActivity } from "./vad";
-import { findVadBoundaryEnd } from "./uploadBoundaryVad";
+import { withTimeout } from "./asyncTimeout";
 
 type WorkerMessage =
   | { type: "ready" }
@@ -37,8 +37,6 @@ const WHISPER_CONTEXT_MS = 30_000;
 const LIVE_ANALYSIS_CHUNK_MS = 500;
 const UPLOADED_MEDIA_MIN_CHUNK_MS = 10_000;
 const UPLOADED_MEDIA_TARGET_CHUNK_MS = 24_000;
-const UPLOADED_MEDIA_BOUNDARY_TIMEOUT_MS = 8_000;
-let isUploadedBoundaryVadUnavailable = false;
 
 export function useTranscriber(settings: RuntimeSettings) {
   const worker = useMemo(
@@ -310,8 +308,21 @@ export function useTranscriber(settings: RuntimeSettings) {
   );
 
   useEffect(() => {
+    isWorkerReadyRef.current = false;
+    workerReadyPromiseRef.current = null;
+    workerReadyResolveRef.current = null;
+    workerReadyRejectRef.current = null;
+    isModelCachedRef.current = false;
+    hasCheckedModelCacheRef.current = false;
+    setIsModelCached(false);
+    setHasCheckedModelCache(false);
+    setIsModelLoading(false);
+    setModelLoadProgress(0);
+    setModelLoadMessage("");
+    setModelCacheStatus("Checking Whisper model cache...");
+    worker.postMessage({ type: "configure", transcription: settings.transcription });
     worker.postMessage({ type: "cache-status" });
-  }, [worker]);
+  }, [settings.transcription, worker]);
 
   const ensureWorkerReady = useCallback(() => {
     if (isWorkerReadyRef.current) {
@@ -398,7 +409,6 @@ export function useTranscriber(settings: RuntimeSettings) {
         setIsModelLoading(false);
         setModelLoadProgress(100);
         setModelLoadMessage("Whisper model is ready.");
-        setIsPreparing(false);
         setProgress("");
         setIsModelCached(true);
         setModelCacheStatus("Whisper model cached locally.");
@@ -839,6 +849,17 @@ export function useTranscriber(settings: RuntimeSettings) {
     }
 
     try {
+      const stream = await getMicrophoneStream(settings);
+      streamRef.current = stream;
+
+      if (!isModelCachedRef.current) {
+        setModelLoadProgress(0);
+        setModelLoadMessage(
+          hasCheckedModelCacheRef.current ? "Checking model files..." : "Checking model cache..."
+        );
+      }
+      await ensureWorkerReady();
+
       latestVoiceRef.current = {
         hasSpeech: false,
         score: 0,
@@ -846,8 +867,6 @@ export function useTranscriber(settings: RuntimeSettings) {
         mode: "unknown"
       };
       adaptiveVadStateRef.current = { noiseFloor: null };
-      const stream = await getMicrophoneStream(settings);
-      streamRef.current = stream;
       const audioContext = new AudioContext({ sampleRate: 16000 });
       audioContextRef.current = audioContext;
       startAnalyser(stream, audioContext);
@@ -879,21 +898,15 @@ export function useTranscriber(settings: RuntimeSettings) {
         };
         recorder.start(opfsChunkMs);
       }
-
-      worker.postMessage({ type: "load" });
-      if (!isModelCachedRef.current) {
-        setModelLoadProgress(0);
-        setModelLoadMessage(
-          hasCheckedModelCacheRef.current ? "Checking model files..." : "Checking model cache..."
-        );
-      }
       setMediaTranscriptionProgress(0);
       setIsRecording(true);
       setIsPreparing(false);
     } catch (cause) {
       resetCaptureState();
       worker.postMessage({ type: "flush" });
-      setError(cause instanceof Error ? cause.message : "Unable to access the microphone.");
+      setError(
+        cause instanceof Error ? cause.message : "Unable to start recording."
+      );
     }
   }, [
     isTranscriptionSupported,
@@ -901,6 +914,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     opfsChunkMs,
     settings,
     finalizeCurrentPart,
+    ensureWorkerReady,
     resetCaptureState,
     shouldRecordToOpfs,
     startAnalyser,
@@ -1005,7 +1019,6 @@ export function useTranscriber(settings: RuntimeSettings) {
             const splitEnd = await getBufferedUploadedMediaSplitEnd(
               buffered,
               audioContext.sampleRate,
-              settings,
               minChunkSamples
             );
             if (splitEnd === null) break;
@@ -1031,13 +1044,13 @@ export function useTranscriber(settings: RuntimeSettings) {
         };
         media.onended = () => {
           isEnded = true;
-          if (buffered.length > 0) {
-            const finalChunk = buffered;
-            buffered = new Float32Array();
-            processQueue = processQueue.then(async () => {
+          processQueue = processQueue.then(async () => {
+            if (buffered.length > 0) {
+              const finalChunk = buffered;
+              buffered = new Float32Array();
               await processUploadedPcmChunk(finalChunk, audioContext.sampleRate, startsNewParagraph);
-            });
-          }
+            }
+          });
           void processQueue
             .then(async () => {
               await waitForWorkerIdle();
@@ -1277,43 +1290,6 @@ function getSupportedMimeType() {
   return types.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
 }
 
-async function findDedicatedVadBoundaryEnd(
-  audio: Float32Array,
-  segmentStart: number,
-  searchStart: number,
-  searchEnd: number,
-  sampleRate: number,
-  settings: RuntimeSettings
-) {
-  if (isUploadedBoundaryVadUnavailable) return null;
-
-  const requiredQuietSamples = getSamplesForMs(
-    sampleRate,
-    Math.max(settings.vad.paragraphSilenceMs, settings.audio.overlapMs)
-  );
-
-  try {
-    return await withTimeout(
-      findVadBoundaryEnd(
-        audio,
-        segmentStart,
-        searchStart,
-        searchEnd,
-        sampleRate,
-        requiredQuietSamples
-      ),
-      UPLOADED_MEDIA_BOUNDARY_TIMEOUT_MS
-    );
-  } catch (cause) {
-    isUploadedBoundaryVadUnavailable = true;
-    console.warn(
-      "Dedicated upload VAD boundary detection failed; falling back to fixed media chunks.",
-      cause
-    );
-    return null;
-  }
-}
-
 function getSamplesForMs(sampleRate: number, ms: number) {
   return Math.max(1, Math.floor(sampleRate * (ms / 1000)));
 }
@@ -1337,18 +1313,6 @@ async function getUploadedMediaSplitEnd(
     return allowPartialFinalChunk ? audio.length : null;
   }
 
-  const searchStart = offset + minSamples;
-  const searchEnd = Math.min(audio.length, offset + maxSamples);
-  const quietEnd = await findDedicatedVadBoundaryEnd(
-    audio,
-    offset,
-    searchStart,
-    searchEnd,
-    sampleRate,
-    settings
-  );
-  if (quietEnd !== null) return quietEnd;
-
   if (remainingSamples >= maxSamples) {
     return offset + maxSamples;
   }
@@ -1360,26 +1324,11 @@ async function getUploadedMediaSplitEnd(
 async function getBufferedUploadedMediaSplitEnd(
   audio: Float32Array,
   sampleRate: number,
-  settings: RuntimeSettings,
   minSamples: number
 ) {
   if (audio.length < minSamples) return null;
 
   const targetSamples = getSamplesForMs(sampleRate, UPLOADED_MEDIA_TARGET_CHUNK_MS);
-  const searchStart = minSamples;
-  const searchEnd = Math.min(audio.length, targetSamples);
-
-  if (searchEnd > searchStart) {
-    const quietEnd = await findDedicatedVadBoundaryEnd(
-      audio,
-      0,
-      searchStart,
-      searchEnd,
-      sampleRate,
-      settings
-    );
-    if (quietEnd !== null) return quietEnd;
-  }
 
   if (audio.length >= targetSamples) {
     return targetSamples;
@@ -1427,25 +1376,6 @@ function consumeBufferedAudio(
 
   sampleCountRef.current -= targetSamples;
   return output;
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
-  return new Promise<T>((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
-      reject(new Error(`Timed out after ${timeoutMs}ms.`));
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        window.clearTimeout(timeoutId);
-        resolve(value);
-      },
-      (cause) => {
-        window.clearTimeout(timeoutId);
-        reject(cause);
-      }
-    );
-  });
 }
 
 function mergeTranscriptText(previous: string, incoming: string) {

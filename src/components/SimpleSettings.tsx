@@ -4,6 +4,7 @@ import { PageSettingsControls } from "./PageSettingsDialog";
 import type { PageStyleSettings } from "../config/pageStyle";
 import {
   settingsOptions,
+  transcriptionModelOptions,
   type RuntimeSettings,
   type SettingsOption
 } from "../config/settingsOptions";
@@ -48,6 +49,7 @@ export function SimpleSettings({
   const silenceOption = getActiveSilenceOption(settings);
   const recordOption = getOption("recordOpfs");
   const recordingFormatOption = getOption("recordingFormat");
+  const transcriptionModelOption = getOption("transcriptionModel");
   const transcriptScrollOption = getOption("transcriptScrollSpeed");
   const voiceEngineOption = getOption("voiceEngine");
   const [activeTab, setActiveTab] = useState<"app" | "appearance">("app");
@@ -155,6 +157,12 @@ export function SimpleSettings({
         />
         <SettingControl
           disabled={disabled}
+          option={transcriptionModelOption}
+          settings={settings}
+          onUpdate={onUpdate}
+        />
+        <SettingControl
+          disabled={disabled}
           option={transcriptScrollOption}
           settings={settings}
           onUpdate={onUpdate}
@@ -197,6 +205,7 @@ export function SimpleSettings({
                     autoGainControlOption.key,
                     recordOption.key,
                     recordingFormatOption.key,
+                    transcriptionModelOption.key,
                     transcriptScrollOption.key,
                     voiceEngineOption.key
                   ].includes(option.key)
@@ -253,6 +262,50 @@ function SettingControl({
   }
 
   if (option.kind === "select") {
+    if (option.key === "transcriptionModel") {
+      return (
+        <fieldset className="model-picker">
+          <legend>{option.label}</legend>
+          <p className="model-picker-intro">
+            Each option includes its language coverage and why you would pick it.
+          </p>
+          <div className="model-picker-grid" role="radiogroup" aria-label={option.label}>
+            {transcriptionModelOptions.map((item) => {
+              const checked = option.getValue(settings) === item.value;
+              return (
+                <label
+                  key={item.value}
+                  className="model-card"
+                  data-checked={checked}
+                  data-language-support={item.languageSupport}
+                >
+                  <input
+                    type="radio"
+                    name={option.key}
+                    value={item.value}
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={(event) => onUpdate(option, event.target.value)}
+                  />
+                  <span className="model-card-topline">
+                    <strong>{item.label}</strong>
+                    <em>{item.languageSupport}</em>
+                  </span>
+                  <span className="model-card-meta">
+                    <span>{item.parameters}</span>
+                    <code>{item.repo}</code>
+                  </span>
+                  <span className="model-card-summary">{item.summary}</span>
+                  <span className="model-card-why">{item.whyChoose}</span>
+                  {item.caution ? <span className="model-card-caution">{item.caution}</span> : null}
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+      );
+    }
+
     return (
       <label className="settings-control">
         <span>{option.label}</span>

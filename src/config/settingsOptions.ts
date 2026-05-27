@@ -2,6 +2,7 @@ import {
   appSettings,
   type AppSettings,
   type RecordingExportFormat,
+  type TranscriptionModelId,
   type TtsProvider,
   type VadMode
 } from "./settings";
@@ -35,6 +36,17 @@ export type RuntimeSettings = Omit<AppSettings, "tts"> & {
 type SelectOption<T extends string = string> = {
   label: string;
   value: T;
+};
+
+export type TranscriptionModelOption = {
+  value: TranscriptionModelId;
+  label: string;
+  repo: string;
+  parameters: string;
+  languageSupport: "English only" | "Multilingual";
+  summary: string;
+  whyChoose: string;
+  caution?: string;
 };
 
 export type SettingsOption =
@@ -125,6 +137,63 @@ export const recordingExportFormatOptions: SelectOption<RecordingExportFormat>[]
   { value: "mp3", label: "MP3" },
   { value: "flac", label: "FLAC" },
   { value: "wav", label: "WAV" }
+];
+
+export const transcriptionModelOptions: TranscriptionModelOption[] = [
+  {
+    value: "onnx-community/whisper-tiny.en",
+    label: "Whisper Tiny",
+    repo: "onnx-community/whisper-tiny.en",
+    parameters: "39M params",
+    languageSupport: "English only",
+    summary: "Smallest English Whisper checkpoint in the app.",
+    whyChoose: "Choose this when first-run download size matters most and you want the quickest lightweight English model."
+  },
+  {
+    value: "onnx-community/whisper-base.en",
+    label: "Whisper Base",
+    repo: "onnx-community/whisper-base.en",
+    parameters: "74M params",
+    languageSupport: "English only",
+    summary: "A modest step up from Tiny without a huge jump in size.",
+    whyChoose: "Choose this when Tiny feels too weak but you still want a relatively small English-only download."
+  },
+  {
+    value: "onnx-community/whisper-small.en",
+    label: "Whisper Small",
+    repo: "onnx-community/whisper-small.en",
+    parameters: "244M params",
+    languageSupport: "English only",
+    summary: "The strongest classic English-only Whisper size before Medium.",
+    whyChoose: "Choose this when you want stronger English accuracy than Base and can accept a noticeably larger download."
+  },
+  {
+    value: "onnx-community/whisper-tiny",
+    label: "Whisper Tiny",
+    repo: "onnx-community/whisper-tiny",
+    parameters: "39M params",
+    languageSupport: "Multilingual",
+    summary: "Smallest multilingual Whisper checkpoint.",
+    whyChoose: "Choose this when you need multiple spoken languages but still want the lightest possible model."
+  },
+  {
+    value: "onnx-community/whisper-base",
+    label: "Whisper Base",
+    repo: "onnx-community/whisper-base",
+    parameters: "74M params",
+    languageSupport: "Multilingual",
+    summary: "Balanced multilingual option with a moderate model size.",
+    whyChoose: "Choose this when you need multilingual transcription and want a safer quality floor than Tiny without jumping to a very large model."
+  },
+  {
+    value: "onnx-community/whisper-small",
+    label: "Whisper Small",
+    repo: "onnx-community/whisper-small",
+    parameters: "244M params",
+    languageSupport: "Multilingual",
+    summary: "A stronger multilingual Whisper checkpoint that is still smaller than Medium.",
+    whyChoose: "Choose this when you want better multilingual accuracy than Base and can afford a bigger first-run download."
+  }
 ];
 
 export const settingsOptions: SettingsOption[] = [
@@ -324,6 +393,28 @@ export const settingsOptions: SettingsOption[] = [
     setValue: (settings, value) => ({
       ...settings,
       audio: { ...settings.audio, recordingExportFormat: value as RecordingExportFormat }
+    })
+  },
+  {
+    key: "transcriptionModel",
+    section: "recording",
+    label: "Whisper model",
+    kind: "select",
+    options: transcriptionModelOptions.map(({ value, label, languageSupport }) => ({
+      value,
+      label: `${label} (${languageSupport})`
+    })),
+    getValue: (settings) => settings.transcription.modelId,
+    setValue: (settings, value) => ({
+      ...settings,
+      transcription: {
+        ...settings.transcription,
+        modelId: value as TranscriptionModelId,
+        // Leave generation prompts unset so multilingual checkpoints can auto-detect language.
+        isMultilingual: false,
+        language: "en",
+        task: "transcribe"
+      }
     })
   },
   {

@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { Circle, Minus, Pause, Play, Plus, SlidersHorizontal, Square, Upload } from "lucide-react";
+import { Circle, Pause, Play, SlidersHorizontal, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import "./styles.css";
@@ -14,22 +14,12 @@ import {
   encodeSettingsInUrl,
   getRealtimeSilenceRms,
   readSettingsFromUrl,
-  settingsOptions,
   type RuntimeTtsSettings,
   type SettingsOption
 } from "./config/settingsOptions";
 import { useTranscriber } from "./recorder/useTranscriber";
-import { splitSpeechPhrasesFromBlocks } from "./speech/subtitlePhrases";
 import { useSubtitleSpeech } from "./speech/useSubtitleSpeech";
 import { useJassubSubtitles } from "./subtitles/useJassubSubtitles";
-
-const MIN_SCROLL_SPEED = 1;
-const MAX_SCROLL_SPEED = 10;
-
-function getScrollPixelsPerSecond(speed: number) {
-  const normalized = Math.max(MIN_SCROLL_SPEED, Math.min(MAX_SCROLL_SPEED, speed));
-  return 35 + (normalized - MIN_SCROLL_SPEED) * 35;
-}
 
 function App() {
   const [settings, setSettings] = useState(() => readSettingsFromUrl());
@@ -38,7 +28,7 @@ function App() {
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const transcriptRef = useRef<HTMLElement | null>(null);
-  const transcriptCurrentMarkerRef = useRef<HTMLSpanElement | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const updateSettings = useCallback((option: SettingsOption, value: boolean | number | string) => {
     setSettings((current) => {
       if (option.kind === "checkbox" && typeof value === "boolean") {
@@ -81,23 +71,12 @@ function App() {
   const transcriptText = recorder.partialText || recorder.paragraphs.at(-1) || "";
   const speech = useSubtitleSpeech(transcriptText, settings.tts, updateTtsSettings);
   const aria = getAriaCopy(settings.pageStyle.roleVerbosity);
-  const transcriptScrollOption = getOption("transcriptScrollSpeed");
-  const scrollSpeed = Math.round(
-    Math.max(MIN_SCROLL_SPEED, Math.min(MAX_SCROLL_SPEED, settings.transcript.autoScrollSpeed))
-  );
-  const showSubtitleOverlay = (recorder.isRecording && !recorder.isTranscribingMedia) || speech.isSpeaking;
-  const transcriptHistory =
-    recorder.partialText
-      ? recorder.paragraphs
-      : recorder.paragraphs.slice(0, Math.max(0, recorder.paragraphs.length - 1));
-  const transcriptBlocks = showSubtitleOverlay
-    ? transcriptHistory
-    : recorder.partialText
-      ? [...recorder.paragraphs, recorder.partialText]
-      : recorder.paragraphs;
-  const transcriptPhraseBlocks = splitSpeechPhrasesFromBlocks(transcriptBlocks);
+  const showSubtitleOverlay = speech.isSpeaking;
+  const transcriptBlocks = recorder.partialText
+    ? [...recorder.paragraphs, recorder.partialText]
+    : recorder.paragraphs;
   const playbackText = transcriptBlocks.join("\n").trim();
-  const subtitleText = speech.activePhraseText || transcriptText;
+  const subtitleText = speech.isSpeaking ? speech.activePhraseText || transcriptText : "";
   const setSubtitleCanvas = useJassubSubtitles(subtitleText);
   const handleMediaFiles = useCallback(
     (files: FileList | null) => {
@@ -166,57 +145,19 @@ function App() {
   useEffect(() => {
     const container = transcriptRef.current;
     if (!container) return;
-    if (!isAutoScrollEnabled) return;
     if (transcriptBlocks.length === 0) {
       container.scrollTop = 0;
       return;
     }
+    if (!isAutoScrollEnabled) return;
 
-    let frameId = 0;
-    let previous = performance.now();
-    const speed = getScrollPixelsPerSecond(settings.transcript.autoScrollSpeed);
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    const distanceFromBottom = maxScrollTop - container.scrollTop;
+    const shouldFollow = distanceFromBottom < Math.max(96, container.clientHeight * 0.2);
+    if (!shouldFollow) return;
 
-    const step = (timestamp: number) => {
-      const elapsed = (timestamp - previous) / 1000;
-      previous = timestamp;
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-      let target = maxScrollTop;
-
-      if (!showSubtitleOverlay) {
-        const marker = transcriptCurrentMarkerRef.current;
-        if (marker) {
-          const anchorOffset = container.clientHeight * 0.46;
-          const markerOffset =
-            marker.getBoundingClientRect().top -
-            container.getBoundingClientRect().top +
-            container.scrollTop;
-          target = Math.max(0, Math.min(maxScrollTop, markerOffset - anchorOffset));
-        }
-      }
-
-      if (maxScrollTop <= 0) {
-        if (container.scrollTop !== 0) {
-          container.scrollTop = 0;
-        }
-        frameId = window.requestAnimationFrame(step);
-        return;
-      }
-
-      const delta = target - container.scrollTop;
-      const maxStep = Math.max(1, speed * elapsed);
-
-      if (Math.abs(delta) <= maxStep) {
-        container.scrollTop = target;
-      } else {
-        container.scrollTop += Math.sign(delta) * maxStep;
-      }
-
-      frameId = window.requestAnimationFrame(step);
-    };
-
-    frameId = window.requestAnimationFrame(step);
-    return () => window.cancelAnimationFrame(frameId);
-  }, [isAutoScrollEnabled, showSubtitleOverlay, transcriptBlocks, settings.transcript.autoScrollSpeed]);
+    transcriptEndRef.current?.scrollIntoView({ block: "end" });
+  }, [isAutoScrollEnabled, transcriptBlocks]);
 
   return (
     <main className="app-shell" data-recording={recorder.isRecording}>
@@ -313,39 +254,15 @@ function App() {
         <div className="transcript-body">
           {transcriptBlocks.length > 0 ? (
             <>
-              {(() => {
-                let phraseCursor = 0;
-                return transcriptBlocks.map((paragraph, index) => {
-                  const block = transcriptPhraseBlocks[index];
-
-                  return (
-                    <p key={`${index}-${paragraph.slice(0, 16)}`}>
-                      {block?.phrases.length
-                        ? block.phrases.map((phrase) => {
-                            const globalPhraseIndex = phraseCursor;
-                            phraseCursor += 1;
-
-                            return (
-                              <span
-                                key={`${globalPhraseIndex}-${phrase.text.slice(0, 16)}`}
-                                className={
-                                  globalPhraseIndex === speech.activePhraseIndex
-                                    ? "transcript-phrase transcript-phrase-active"
-                                    : "transcript-phrase"
-                                }
-                              >
-                                {phrase.text}
-                              </span>
-                            );
-                          })
-                        : paragraph}
-                      {!showSubtitleOverlay && index === transcriptBlocks.length - 1 ? (
-                        <span ref={transcriptCurrentMarkerRef} className="transcript-current-marker" />
-                      ) : null}
-                    </p>
-                  );
-                });
-              })()}
+              {transcriptBlocks.map((paragraph, index) => (
+                <p
+                  key={`${index}-${paragraph.slice(0, 16)}`}
+                  className={index === transcriptBlocks.length - 1 && recorder.partialText ? "partial" : undefined}
+                >
+                  {paragraph}
+                </p>
+              ))}
+              <div ref={transcriptEndRef} className="transcript-end-anchor" aria-hidden="true" />
             </>
           ) : (
             <p className="empty">
@@ -366,8 +283,8 @@ function App() {
         ) : null}
       </section>
 
-      <div className="scroll-gadget" aria-label="Transcript scroll speed">
-        <label>Scroll</label>
+      <div className="scroll-gadget" aria-label="Transcript follow mode">
+        <label>Follow</label>
         <button
           type="button"
           className="scroll-toggle-button"
@@ -378,35 +295,6 @@ function App() {
         >
           {isAutoScrollEnabled ? <Pause size={16} /> : <Play size={16} />}
           <span>{isAutoScrollEnabled ? "Auto" : "Manual"}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            updateSettings(
-              transcriptScrollOption,
-              Math.max(MIN_SCROLL_SPEED, scrollSpeed - 1)
-            )
-          }
-          title="Slower transcript scroll"
-          aria-label="Slower transcript scroll"
-          disabled={!isAutoScrollEnabled}
-        >
-          <Minus size={16} />
-        </button>
-        <output><strong>{scrollSpeed}</strong></output>
-        <button
-          type="button"
-          onClick={() =>
-            updateSettings(
-              transcriptScrollOption,
-              Math.min(MAX_SCROLL_SPEED, scrollSpeed + 1)
-            )
-          }
-          title="Faster transcript scroll"
-          aria-label="Faster transcript scroll"
-          disabled={!isAutoScrollEnabled}
-        >
-          <Plus size={16} />
         </button>
       </div>
 
@@ -438,12 +326,6 @@ function App() {
       ) : null}
     </main>
   );
-}
-
-function getOption(key: string) {
-  const option = settingsOptions.find((item) => item.key === key);
-  if (!option) throw new Error(`Missing setting option: ${key}`);
-  return option;
 }
 
 function TranscriptionSupportDialog({ isOpen }: { isOpen: boolean }) {

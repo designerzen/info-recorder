@@ -6,6 +6,13 @@ export type VadMode =
 
 export type TtsProvider = "web-speech" | "supertonic-web";
 export type RecordingExportFormat = "native" | "ogg-vorbis" | "ogg-opus" | "mp3" | "flac" | "wav";
+export type TranscriptionModelId =
+  | "onnx-community/whisper-tiny.en"
+  | "onnx-community/whisper-base.en"
+  | "onnx-community/whisper-small.en"
+  | "onnx-community/whisper-tiny"
+  | "onnx-community/whisper-base"
+  | "onnx-community/whisper-small";
 
 export type SupertonicVoiceId =
   | "M1"
@@ -30,7 +37,7 @@ export type AppSettings = {
     autoScrollSpeed: number;
   };
   transcription: {
-    modelId: string;
+    modelId: TranscriptionModelId;
     device: "webgpu";
     isMultilingual: boolean;
     language: string;
@@ -113,7 +120,7 @@ export const appSettings: AppSettings = {
     autoScrollSpeed: 5
   },
   transcription: {
-    modelId: "onnx-community/whisper-tiny.en",
+    modelId: "onnx-community/whisper-small.en",
     device: "webgpu",
     isMultilingual: false,
     language: "en",
