@@ -4,6 +4,7 @@ import type {
   AutomaticSpeechRecognitionOutput,
 } from "@huggingface/transformers";
 import { appSettings } from "../config/settings";
+import { clampProgress, ModelDownloadTracker } from "./modelDownloadTracker";
 import { resampleLinear } from "./audioUtils";
 
 type AutomaticSpeechRecognitionPipelineType = AllTasks["automatic-speech-recognition"];
@@ -27,6 +28,7 @@ const TASK = "automatic-speech-recognition";
 const CACHE_NAME = "info-recorder-transformers-cache";
 const WHISPER_CONTEXT_SECONDS = 30;
 const WHISPER_STRIDE_SECONDS = 5;
+const SHORT_AUDIO_DIRECT_SECONDS = 12;
 const PIPELINE_OPTIONS = {
   device: appSettings.transcription.device,
   dtype: {
@@ -46,8 +48,9 @@ env.cacheKey = CACHE_NAME;
 let transcriber: AutomaticSpeechRecognitionPipelineType | null = null;
 let loadingPromise: Promise<AutomaticSpeechRecognitionPipelineType> | null = null;
 let queue = Promise.resolve();
-let currentFileLabel = "model files";
 let overallProgress = 0;
+let downloadTracker: ModelDownloadTracker | null = null;
+const defaultFetch = env.fetch;
 
 self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
   if (data.type === "cache-status") {
@@ -66,7 +69,12 @@ self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
   }
 
   if (data.type === "flush") {
-    postMessage({ type: "partial", text: "" });
+    queue = queue
+      .then(() => {
+        postMessage({ type: "partial", text: "" });
+        postMessage({ type: "idle" });
+      })
+      .catch(reportError);
     return;
   }
 
@@ -82,9 +90,10 @@ async function load() {
 
   if (!loadingPromise) {
     const status = await inspectCacheStatus();
-    overallProgress = status.cached ? 100 : 0;
-    currentFileLabel = "model files";
+    downloadTracker = await prepareDownloadTracker(status);
+    overallProgress = status.cached ? 100 : downloadTracker?.getProgress() ?? 0;
     postCacheStatusMessage(status);
+    env.fetch = createWorkerFetch();
     loadingPromise = pipeline(TASK, MODEL_ID, {
       ...PIPELINE_OPTIONS,
       progress_callback: (event: unknown) => {
@@ -103,11 +112,11 @@ async function transcribe(message: Extract<InboundMessage, { type: "transcribe" 
   const recognizer = transcriber ?? (await load());
   const audio =
     message.sampleRate === 16000 ? message.audio : resampleLinear(message.audio, message.sampleRate, 16000);
+  const durationSeconds = audio.length / 16000;
 
   const result = await recognizer(audio, {
     ...getGenerationOptions(),
-    chunk_length_s: WHISPER_CONTEXT_SECONDS,
-    stride_length_s: WHISPER_STRIDE_SECONDS
+    ...getChunkingOptions(durationSeconds)
   });
 
   const output = result as AutomaticSpeechRecognitionOutput | AutomaticSpeechRecognitionOutput[];
@@ -117,53 +126,27 @@ async function transcribe(message: Extract<InboundMessage, { type: "transcribe" 
 
 function describeProgress(event: unknown) {
   if (!event || typeof event !== "object") {
-    return { message: "Loading model files", progress: overallProgress };
+    return { message: "Loading Whisper model...", progress: overallProgress };
   }
 
   const record = event as Record<string, unknown>;
-  const file =
-    typeof record.file === "string" ? (record.file.split("/").at(-1) ?? "model files") : currentFileLabel;
+  const status = typeof record.status === "string" ? record.status : "";
 
-  if (record.status === "progress_total") {
-    overallProgress = Math.max(overallProgress, normalizeProgress(record.progress));
+  if (status === "download" || status === "progress" || status === "progress_total") {
     return {
-      message: `Downloading ${currentFileLabel}`,
+      message: "Downloading Whisper package...",
       progress: overallProgress
     };
   }
 
-  if (record.status === "progress") {
-    currentFileLabel = file;
+  if (status === "done") {
     return {
-      message: `Downloading ${currentFileLabel}`,
+      message: "Finalizing Whisper model...",
       progress: overallProgress
     };
   }
 
-  if (record.status === "download") {
-    currentFileLabel = file;
-    return {
-      message: `Starting ${currentFileLabel}`,
-      progress: overallProgress
-    };
-  }
-
-  if (record.status === "done") {
-    currentFileLabel = file;
-    return {
-      message: `Finished ${currentFileLabel}`,
-      progress: overallProgress
-    };
-  }
-
-  if (typeof record.status === "string" && record.status !== "initiate") {
-    return {
-      message: `Downloading ${currentFileLabel}`,
-      progress: overallProgress
-    };
-  }
-
-  return { message: `Downloading ${currentFileLabel}`, progress: overallProgress };
+  return { message: "Loading Whisper model...", progress: overallProgress };
 }
 
 function getGenerationOptions() {
@@ -172,6 +155,25 @@ function getGenerationOptions() {
   return {
     language: appSettings.transcription.language,
     task: appSettings.transcription.task
+  };
+}
+
+function getChunkingOptions(durationSeconds: number) {
+  if (durationSeconds <= SHORT_AUDIO_DIRECT_SECONDS) {
+    return {};
+  }
+
+  const chunkLengthSeconds = Math.min(
+    WHISPER_CONTEXT_SECONDS,
+    Math.max(SHORT_AUDIO_DIRECT_SECONDS, Math.ceil(durationSeconds))
+  );
+
+  return {
+    chunk_length_s: chunkLengthSeconds,
+    stride_length_s: Math.min(
+      WHISPER_STRIDE_SECONDS,
+      Math.max(1, Math.floor(chunkLengthSeconds / 6))
+    )
   };
 }
 
@@ -185,6 +187,9 @@ async function postCacheStatus() {
     const status = await inspectCacheStatus();
     if (status.cached) {
       overallProgress = 100;
+    } else {
+      downloadTracker = await prepareDownloadTracker(status);
+      overallProgress = downloadTracker?.getProgress() ?? 0;
     }
     postCacheStatusMessage(status);
   } catch (cause) {
@@ -212,7 +217,8 @@ async function inspectCacheStatus() {
   return {
     cached: status.allCached,
     cachedFiles: status.files.filter((file) => file.cached).length,
-    totalFiles: status.files.length
+    totalFiles: status.files.length,
+    files: status.files
   };
 }
 
@@ -229,8 +235,135 @@ function postCacheStatusMessage(status: {
   });
 }
 
-function normalizeProgress(value: unknown) {
-  if (typeof value !== "number" || Number.isNaN(value)) return 0;
-  if (value <= 1) return Math.min(100, Math.max(0, value * 100));
-  return Math.min(100, Math.max(0, value));
+async function prepareDownloadTracker(status?: Awaited<ReturnType<typeof inspectCacheStatus>>) {
+  const cacheStatus = status ?? (await inspectCacheStatus());
+  const files = await ModelRegistry.get_pipeline_files(TASK, MODEL_ID, PIPELINE_OPTIONS);
+  const metadata = await Promise.all(
+    files.map(async (file) => ({
+      file,
+      metadata: await ModelRegistry.get_file_metadata(MODEL_ID, file, PIPELINE_OPTIONS as never)
+    }))
+  );
+  const cachedFiles = new Set(
+    cacheStatus.files.filter((file) => file.cached).map((file) => file.file)
+  );
+
+  return new ModelDownloadTracker(
+    metadata.map(({ file, metadata: fileMetadata }) => ({
+      url: buildRemoteUrl(MODEL_ID, file),
+      size: fileMetadata.size ?? 0,
+      cached: cachedFiles.has(file)
+    }))
+  );
+}
+
+function createWorkerFetch() {
+  return async (input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    if (!shouldTrackRequest(request)) {
+      return defaultFetch(request.url, {
+        method: request.method,
+        headers: request.headers,
+        signal: request.signal
+      });
+    }
+
+    return fetchWithXhr(request);
+  };
+}
+
+function shouldTrackRequest(request: Request) {
+  if (request.method !== "GET") return false;
+  if (request.headers.has("Range")) return false;
+
+  const url = request.url;
+  return downloadTracker !== null && isTrackedRemoteModelUrl(url);
+}
+
+function isTrackedRemoteModelUrl(url: string) {
+  const remotePrefix = `${env.remoteHost.replace(/\/+$/, "")}/`;
+  const expectedModelPath = env.remotePathTemplate
+    .replaceAll("{model}", MODEL_ID)
+    .replaceAll("{revision}", encodeURIComponent("main"));
+  return url.startsWith(`${remotePrefix}${expectedModelPath}`);
+}
+
+function fetchWithXhr(request: Request) {
+  return new Promise<Response>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(request.method, request.url, true);
+    xhr.responseType = "arraybuffer";
+
+    request.headers.forEach((value, key) => {
+      xhr.setRequestHeader(key, value);
+    });
+
+    const abort = () => xhr.abort();
+    request.signal.addEventListener("abort", abort, { once: true });
+
+    xhr.onprogress = (event) => {
+      const nextProgress = downloadTracker?.trackProgress(
+        request.url,
+        event.loaded,
+        event.lengthComputable ? event.total : undefined
+      );
+      if (typeof nextProgress === "number") {
+        overallProgress = clampProgress(nextProgress);
+        postMessage({
+          type: "progress",
+          message: "Downloading Whisper package...",
+          progress: overallProgress
+        });
+      }
+    };
+
+    xhr.onload = () => {
+      request.signal.removeEventListener("abort", abort);
+      const headers = new Headers();
+      for (const rawHeadersLine of xhr.getAllResponseHeaders().trim().split(/[\r\n]+/)) {
+        if (!rawHeadersLine) continue;
+        const separatorIndex = rawHeadersLine.indexOf(":");
+        if (separatorIndex === -1) continue;
+        const key = rawHeadersLine.slice(0, separatorIndex).trim();
+        const value = rawHeadersLine.slice(separatorIndex + 1).trim();
+        headers.append(key, value);
+      }
+
+      const nextProgress = downloadTracker?.markDone(request.url);
+      if (typeof nextProgress === "number") {
+        overallProgress = clampProgress(nextProgress);
+      }
+
+      resolve(
+        new Response(xhr.response, {
+          status: xhr.status,
+          statusText: xhr.statusText,
+          headers
+        })
+      );
+    };
+
+    xhr.onerror = () => {
+      request.signal.removeEventListener("abort", abort);
+      reject(new Error(`Unable to download ${request.url}.`));
+    };
+
+    xhr.onabort = () => {
+      request.signal.removeEventListener("abort", abort);
+      reject(new DOMException("The request was aborted.", "AbortError"));
+    };
+
+    xhr.send();
+  });
+}
+
+function buildRemoteUrl(modelId: string, file: string) {
+  const remoteHost = env.remoteHost.replace(/\/+$/, "");
+  const remotePath = env.remotePathTemplate
+    .replaceAll("{model}", modelId)
+    .replaceAll("{revision}", encodeURIComponent("main"))
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  const normalizedFile = file.replace(/^\/+/, "");
+  return `${remoteHost}/${remotePath}/${normalizedFile}`;
 }

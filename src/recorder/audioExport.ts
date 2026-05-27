@@ -40,6 +40,39 @@ export async function exportRecordingBlob(
   return new Blob([normalizeFileData(output)], { type: target.mimeType });
 }
 
+export async function extractAudioForTranscription(
+  source: Blob,
+  sourceMimeType: string,
+  sourceName?: string,
+  onProgress?: (message: string) => void
+) {
+  onProgress?.("Preparing uploaded media audio...");
+  const ffmpeg = await getFfmpeg(onProgress);
+  const inputName = `input.${getSourceExtension(sourceMimeType, sourceName)}`;
+  const outputName = "transcription.wav";
+
+  await ffmpeg.writeFile(inputName, await fetchFile(source));
+  onProgress?.("Extracting audio track...");
+  await ffmpeg.exec([
+    "-i",
+    inputName,
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "pcm_s16le",
+    outputName
+  ]);
+  const output = await ffmpeg.readFile(outputName);
+  await ffmpeg.deleteFile(inputName);
+  await ffmpeg.deleteFile(outputName);
+  onProgress?.("");
+
+  return new Blob([normalizeFileData(output)], { type: "audio/wav" });
+}
+
 function getFfmpeg(onProgress?: (message: string) => void) {
   ffmpegPromise ??= loadFfmpeg(onProgress);
   return ffmpegPromise;
@@ -99,12 +132,24 @@ function getExportTarget(format: Exclude<RecordingExportFormat, "native">): Expo
 }
 
 function getNativeExtension(mimeType: string) {
-  if (mimeType.includes("mp4")) return "m4a";
+  if (mimeType.startsWith("video/mp4")) return "mp4";
+  if (mimeType.startsWith("audio/mp4")) return "m4a";
   if (mimeType.includes("ogg")) return "ogg";
   if (mimeType.includes("wav")) return "wav";
   if (mimeType.includes("mpeg")) return "mp3";
   if (mimeType.includes("flac")) return "flac";
   return "webm";
+}
+
+function getSourceExtension(mimeType: string, fileName = "") {
+  const fromName = fileName.trim().toLowerCase().match(/\.([a-z0-9]{2,5})$/)?.[1];
+  if (fromName) {
+    if (["mp4", "m4a", "webm", "mp3", "wav", "ogg", "flac", "mov", "mkv"].includes(fromName)) {
+      return fromName;
+    }
+  }
+
+  return getNativeExtension(mimeType);
 }
 
 function formatLabel(format: RecordingExportFormat) {

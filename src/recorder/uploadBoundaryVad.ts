@@ -74,8 +74,8 @@ async function loadModel() {
     const { AutoModel, Tensor, env } = await import("@huggingface/transformers");
     env.allowLocalModels = false;
     env.allowRemoteModels = true;
-    env.useBrowserCache = "caches" in globalThis;
-    env.useWasmCache = true;
+    env.useBrowserCache = false;
+    env.useWasmCache = false;
 
     const model = await AutoModel.from_pretrained(MODEL_ID, {
       dtype: "q8",
@@ -85,7 +85,10 @@ async function loadModel() {
       model: model as unknown as CallableVadModel,
       Tensor: Tensor as TensorConstructor
     };
-  })();
+  })().catch((cause) => {
+    modelPromise = null;
+    throw cause;
+  });
 
   return modelPromise;
 }

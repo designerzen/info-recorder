@@ -32,10 +32,11 @@ function escapeAssText(value: string) {
 }
 
 function formatAssTime(totalSeconds: number) {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = Math.floor(totalSeconds % 60);
-  const centiseconds = Math.floor((totalSeconds % 1) * 100);
+  const totalCentiseconds = Math.max(0, Math.round(totalSeconds * 100));
+  const hours = Math.floor(totalCentiseconds / 360000);
+  const minutes = Math.floor((totalCentiseconds % 360000) / 6000);
+  const seconds = Math.floor((totalCentiseconds % 6000) / 100);
+  const centiseconds = totalCentiseconds % 100;
   return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds
     .toString()
     .padStart(2, "0")}.${centiseconds.toString().padStart(2, "0")}`;

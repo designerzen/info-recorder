@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { Circle, Minus, Plus, SlidersHorizontal, Square, Upload } from "lucide-react";
+import { Circle, Minus, Pause, Play, Plus, SlidersHorizontal, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import "./styles.css";
@@ -19,13 +19,23 @@ import {
   type SettingsOption
 } from "./config/settingsOptions";
 import { useTranscriber } from "./recorder/useTranscriber";
+import { splitSpeechPhrasesFromBlocks } from "./speech/subtitlePhrases";
 import { useSubtitleSpeech } from "./speech/useSubtitleSpeech";
 import { useJassubSubtitles } from "./subtitles/useJassubSubtitles";
+
+const MIN_SCROLL_SPEED = 1;
+const MAX_SCROLL_SPEED = 10;
+
+function getScrollPixelsPerSecond(speed: number) {
+  const normalized = Math.max(MIN_SCROLL_SPEED, Math.min(MAX_SCROLL_SPEED, speed));
+  return 35 + (normalized - MIN_SCROLL_SPEED) * 35;
+}
 
 function App() {
   const [settings, setSettings] = useState(() => readSettingsFromUrl());
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const transcriptRef = useRef<HTMLElement | null>(null);
   const transcriptCurrentMarkerRef = useRef<HTMLSpanElement | null>(null);
@@ -70,10 +80,12 @@ function App() {
   const recorder = useTranscriber(settings);
   const transcriptText = recorder.partialText || recorder.paragraphs.at(-1) || "";
   const speech = useSubtitleSpeech(transcriptText, settings.tts, updateTtsSettings);
-  const setSubtitleCanvas = useJassubSubtitles(transcriptText);
   const aria = getAriaCopy(settings.pageStyle.roleVerbosity);
   const transcriptScrollOption = getOption("transcriptScrollSpeed");
-  const showSubtitleOverlay = recorder.isRecording && !recorder.isTranscribingMedia;
+  const scrollSpeed = Math.round(
+    Math.max(MIN_SCROLL_SPEED, Math.min(MAX_SCROLL_SPEED, settings.transcript.autoScrollSpeed))
+  );
+  const showSubtitleOverlay = (recorder.isRecording && !recorder.isTranscribingMedia) || speech.isSpeaking;
   const transcriptHistory =
     recorder.partialText
       ? recorder.paragraphs
@@ -83,6 +95,10 @@ function App() {
     : recorder.partialText
       ? [...recorder.paragraphs, recorder.partialText]
       : recorder.paragraphs;
+  const transcriptPhraseBlocks = splitSpeechPhrasesFromBlocks(transcriptBlocks);
+  const playbackText = transcriptBlocks.join("\n").trim();
+  const subtitleText = speech.activePhraseText || transcriptText;
+  const setSubtitleCanvas = useJassubSubtitles(subtitleText);
   const handleMediaFiles = useCallback(
     (files: FileList | null) => {
       if (!files) return;
@@ -129,6 +145,15 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const selectedDeviceId = settings.microphone.deviceId;
+    if (!selectedDeviceId) return;
+    if (microphoneDevices.length === 0) return;
+    if (microphoneDevices.some((device) => device.deviceId === selectedDeviceId)) return;
+
+    setMicrophone("");
+  }, [microphoneDevices, setMicrophone, settings.microphone.deviceId]);
+
+  useEffect(() => {
     if (recorder?.isRecording) {
       void navigator.mediaDevices
         ?.enumerateDevices()
@@ -141,6 +166,7 @@ function App() {
   useEffect(() => {
     const container = transcriptRef.current;
     if (!container) return;
+    if (!isAutoScrollEnabled) return;
     if (transcriptBlocks.length === 0) {
       container.scrollTop = 0;
       return;
@@ -148,7 +174,7 @@ function App() {
 
     let frameId = 0;
     let previous = performance.now();
-    const speed = settings.transcript.autoScrollSpeed;
+    const speed = getScrollPixelsPerSecond(settings.transcript.autoScrollSpeed);
 
     const step = (timestamp: number) => {
       const elapsed = (timestamp - previous) / 1000;
@@ -190,7 +216,7 @@ function App() {
 
     frameId = window.requestAnimationFrame(step);
     return () => window.cancelAnimationFrame(frameId);
-  }, [showSubtitleOverlay, transcriptBlocks, settings.transcript.autoScrollSpeed]);
+  }, [isAutoScrollEnabled, showSubtitleOverlay, transcriptBlocks, settings.transcript.autoScrollSpeed]);
 
   return (
     <main className="app-shell" data-recording={recorder.isRecording}>
@@ -199,7 +225,9 @@ function App() {
         message={recorder.modelLoadMessage}
         progress={recorder.modelLoadProgress}
       />
-      <WebGpuErrorDialog isOpen={!recorder.isWebGpuAvailable} />
+      <TranscriptionSupportDialog
+        isOpen={!recorder.isTranscriptionSupported && Boolean(recorder.error)}
+      />
       <PageStyleSheet settings={settings.pageStyle} />
       <SimpleSettings
         disabled={recorder.isRecording}
@@ -224,12 +252,31 @@ function App() {
             className="record-button"
             type="button"
             onClick={recorder.isRecording ? recorder.stop : recorder.start}
-            disabled={!recorder.isWebGpuAvailable || recorder.isPreparing || recorder.isTranscribingMedia}
+            disabled={recorder.isPreparing || recorder.isTranscribingMedia}
             title={recorder.isRecording ? "Stop recording" : "Start recording"}
             aria-label={recorder.isRecording ? "Stop recording" : "Start recording"}
           >
             {recorder.isRecording ? <Square size={30} /> : <Circle size={34} />}
             <span>{recorder.isRecording ? "Stop recording" : recorder.isPreparing ? "Loading" : "Record"}</span>
+          </button>
+          <button
+            className="speech-button"
+            type="button"
+            onClick={speech.isSpeaking ? speech.stopSpeaking : () => speech.speakText(playbackText)}
+            disabled={!speech.isSpeechSupported || !playbackText}
+            title={
+              !speech.isSpeechSupported
+                ? "The selected speech engine is not available in this browser."
+                : !playbackText
+                  ? "Nothing to read yet."
+                  : speech.isSpeaking
+                    ? "Stop reading the transcript aloud"
+                    : "Read the transcript aloud"
+            }
+            aria-label={speech.isSpeaking ? "Stop reading the transcript aloud" : "Read the transcript aloud"}
+          >
+            {speech.isSpeaking ? <Square size={22} /> : <Play size={22} />}
+            <span>{speech.isSpeaking ? "Stop reading" : "Play transcript"}</span>
           </button>
           <button
             className="upload-button"
@@ -266,14 +313,39 @@ function App() {
         <div className="transcript-body">
           {transcriptBlocks.length > 0 ? (
             <>
-              {transcriptBlocks.map((paragraph, index) => (
-                <p key={`${index}-${paragraph.slice(0, 16)}`}>
-                  {paragraph}
-                  {!showSubtitleOverlay && index === transcriptBlocks.length - 1 ? (
-                    <span ref={transcriptCurrentMarkerRef} className="transcript-current-marker" />
-                  ) : null}
-                </p>
-              ))}
+              {(() => {
+                let phraseCursor = 0;
+                return transcriptBlocks.map((paragraph, index) => {
+                  const block = transcriptPhraseBlocks[index];
+
+                  return (
+                    <p key={`${index}-${paragraph.slice(0, 16)}`}>
+                      {block?.phrases.length
+                        ? block.phrases.map((phrase) => {
+                            const globalPhraseIndex = phraseCursor;
+                            phraseCursor += 1;
+
+                            return (
+                              <span
+                                key={`${globalPhraseIndex}-${phrase.text.slice(0, 16)}`}
+                                className={
+                                  globalPhraseIndex === speech.activePhraseIndex
+                                    ? "transcript-phrase transcript-phrase-active"
+                                    : "transcript-phrase"
+                                }
+                              >
+                                {phrase.text}
+                              </span>
+                            );
+                          })
+                        : paragraph}
+                      {!showSubtitleOverlay && index === transcriptBlocks.length - 1 ? (
+                        <span ref={transcriptCurrentMarkerRef} className="transcript-current-marker" />
+                      ) : null}
+                    </p>
+                  );
+                });
+              })()}
             </>
           ) : (
             <p className="empty">
@@ -295,34 +367,51 @@ function App() {
       </section>
 
       <div className="scroll-gadget" aria-label="Transcript scroll speed">
-        <span>Scroll</span>
+        <label>Scroll</label>
+        <button
+          type="button"
+          className="scroll-toggle-button"
+          onClick={() => setIsAutoScrollEnabled((current) => !current)}
+          title={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
+          aria-label={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
+          aria-pressed={isAutoScrollEnabled}
+        >
+          {isAutoScrollEnabled ? <Pause size={16} /> : <Play size={16} />}
+          <span>{isAutoScrollEnabled ? "Auto" : "Manual"}</span>
+        </button>
         <button
           type="button"
           onClick={() =>
             updateSettings(
               transcriptScrollOption,
-              Math.max(2, settings.transcript.autoScrollSpeed - 1)
+              Math.max(MIN_SCROLL_SPEED, scrollSpeed - 1)
             )
           }
           title="Slower transcript scroll"
           aria-label="Slower transcript scroll"
+          disabled={!isAutoScrollEnabled}
         >
           <Minus size={16} />
         </button>
-        <strong>{Math.round(settings.transcript.autoScrollSpeed)}</strong>
+        <output><strong>{scrollSpeed}</strong></output>
         <button
           type="button"
           onClick={() =>
             updateSettings(
               transcriptScrollOption,
-              Math.min(26, settings.transcript.autoScrollSpeed + 1)
+              Math.min(MAX_SCROLL_SPEED, scrollSpeed + 1)
             )
           }
           title="Faster transcript scroll"
           aria-label="Faster transcript scroll"
+          disabled={!isAutoScrollEnabled}
         >
           <Plus size={16} />
         </button>
+      </div>
+
+      <div className="waveform-strip" aria-hidden="true">
+        <canvas ref={recorder.setWaveformCanvas} className="waveform-canvas" />
       </div>
 
       {recorder.isTranscribingMedia ? (
@@ -357,7 +446,7 @@ function getOption(key: string) {
   return option;
 }
 
-function WebGpuErrorDialog({ isOpen }: { isOpen: boolean }) {
+function TranscriptionSupportDialog({ isOpen }: { isOpen: boolean }) {
   if (!isOpen) return null;
 
   return (

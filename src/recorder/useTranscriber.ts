@@ -13,11 +13,12 @@ import {
 import type { RuntimeSettings } from "../config/settingsOptions";
 import { concatAudio, getRms, toMono } from "./audioUtils";
 import { exportRecordingBlob, getRecordingExportExtension } from "./audioExport";
-import { detectVoiceActivity, type VoiceActivity } from "./vad";
+import { detectVoiceActivity, type AdaptiveVadState, type VoiceActivity } from "./vad";
 import { findVadBoundaryEnd } from "./uploadBoundaryVad";
 
 type WorkerMessage =
   | { type: "ready" }
+  | { type: "idle" }
   | { type: "progress"; message: string; progress: number }
   | { type: "partial"; text: string }
   | { type: "segment"; text: string; startsNewParagraph: boolean }
@@ -33,8 +34,11 @@ type WorkerMessage =
 const createFloat32Buffer = (length: number) =>
   new Float32Array(new ArrayBuffer(length * Float32Array.BYTES_PER_ELEMENT));
 const WHISPER_CONTEXT_MS = 30_000;
+const LIVE_ANALYSIS_CHUNK_MS = 500;
 const UPLOADED_MEDIA_MIN_CHUNK_MS = 10_000;
 const UPLOADED_MEDIA_TARGET_CHUNK_MS = 24_000;
+const UPLOADED_MEDIA_BOUNDARY_TIMEOUT_MS = 8_000;
+let isUploadedBoundaryVadUnavailable = false;
 
 export function useTranscriber(settings: RuntimeSettings) {
   const worker = useMemo(
@@ -50,8 +54,12 @@ export function useTranscriber(settings: RuntimeSettings) {
   const microphoneSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const microphoneProcessorNodeRef = useRef<AudioWorkletNode | null>(null);
   const microphoneSilentGainRef = useRef<GainNode | null>(null);
-  const microphonePcmBufferRef = useRef<Float32Array>(new Float32Array());
+  const microphonePcmChunksRef = useRef<Float32Array[]>([]);
+  const microphonePcmBufferedSamplesRef = useRef(0);
   const microphoneProcessQueueRef = useRef(Promise.resolve());
+  const liveSpeechChunksRef = useRef<Float32Array[]>([]);
+  const liveSpeechBufferedSamplesRef = useRef(0);
+  const liveSpeechStartsParagraphRef = useRef(false);
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const waveformWorkerRef = useRef<Worker | null>(null);
   const waveformResizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -80,8 +88,16 @@ export function useTranscriber(settings: RuntimeSettings) {
     mode: "unknown"
   });
   const nextSegmentStartsParagraphRef = useRef(false);
+  const adaptiveVadStateRef = useRef<AdaptiveVadState>({ noiseFloor: null });
   const hasTranscriptRef = useRef(false);
   const lastActivityUpdateRef = useRef(0);
+  const isWorkerReadyRef = useRef(false);
+  const workerReadyPromiseRef = useRef<Promise<void> | null>(null);
+  const workerReadyResolveRef = useRef<(() => void) | null>(null);
+  const workerReadyRejectRef = useRef<((cause?: unknown) => void) | null>(null);
+  const workerIdlePromiseRef = useRef<Promise<void> | null>(null);
+  const workerIdleResolveRef = useRef<(() => void) | null>(null);
+  const workerIdleRejectRef = useRef<((cause?: unknown) => void) | null>(null);
   const [error, setError] = useState("");
   const [opfsError, setOpfsError] = useState("");
   const [opfsChunkCount, setOpfsChunkCount] = useState(0);
@@ -108,7 +124,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   );
   const [paragraphs, setParagraphs] = useState<string[]>([]);
 
-  const isWebGpuAvailable = "gpu" in navigator;
+  const isTranscriptionSupported = "gpu" in navigator;
   const isOpfsRecordingAvailable = canUseOpfsRecording();
   const isOpfsPlaybackAvailable = canUseOpfsPlayback();
   const opfsChunkMs = settings.audio.opfsChunkMs;
@@ -246,7 +262,8 @@ export function useTranscriber(settings: RuntimeSettings) {
     microphoneSilentGainRef.current = null;
     microphoneSourceRef.current?.disconnect();
     microphoneSourceRef.current = null;
-    microphonePcmBufferRef.current = new Float32Array();
+    microphonePcmChunksRef.current = [];
+    microphonePcmBufferedSamplesRef.current = 0;
     microphoneProcessQueueRef.current = Promise.resolve();
   }, []);
 
@@ -293,8 +310,89 @@ export function useTranscriber(settings: RuntimeSettings) {
   );
 
   useEffect(() => {
+    worker.postMessage({ type: "cache-status" });
+  }, [worker]);
+
+  const ensureWorkerReady = useCallback(() => {
+    if (isWorkerReadyRef.current) {
+      return Promise.resolve();
+    }
+
+    if (!workerReadyPromiseRef.current) {
+      workerReadyPromiseRef.current = new Promise<void>((resolve, reject) => {
+        workerReadyResolveRef.current = resolve;
+        workerReadyRejectRef.current = reject;
+      });
+      worker.postMessage({ type: "load" });
+    }
+
+    return workerReadyPromiseRef.current;
+  }, [worker]);
+
+  const waitForWorkerIdle = useCallback(() => {
+    if (!workerIdlePromiseRef.current) {
+      workerIdlePromiseRef.current = new Promise<void>((resolve, reject) => {
+        workerIdleResolveRef.current = resolve;
+        workerIdleRejectRef.current = reject;
+      });
+      worker.postMessage({ type: "flush" });
+    }
+
+    return workerIdlePromiseRef.current;
+  }, [worker]);
+
+  const stopPlayback = useCallback(() => {
+    if (playbackTimerRef.current !== null) {
+      window.clearTimeout(playbackTimerRef.current);
+      playbackTimerRef.current = null;
+    }
+
+    playbackNodeRef.current?.port.postMessage({ type: "clear" });
+    playbackNodeRef.current?.disconnect();
+    playbackNodeRef.current = null;
+    playbackContextRef.current?.close();
+    playbackContextRef.current = null;
+    setIsPlayingRecording(false);
+  }, []);
+
+  const resetCaptureState = useCallback(() => {
+    mediaRecorderRef.current = null;
+    cleanupMediaSource();
+    stopAnalyser();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    audioContextRef.current?.close();
+    audioContextRef.current = null;
+    tailRef.current = new Float32Array();
+    latestVoiceRef.current = {
+      hasSpeech: false,
+      score: 0,
+      trailingSilenceMs: 0,
+      mode: "unknown"
+    };
+    nextSegmentStartsParagraphRef.current = false;
+    adaptiveVadStateRef.current = { noiseFloor: null };
+    microphonePcmChunksRef.current = [];
+    microphonePcmBufferedSamplesRef.current = 0;
+    microphoneProcessQueueRef.current = Promise.resolve();
+    liveSpeechChunksRef.current = [];
+    liveSpeechBufferedSamplesRef.current = 0;
+    liveSpeechStartsParagraphRef.current = false;
+    setIsPreparing(false);
+    setIsRecording(false);
+    setIsTranscribingMedia(false);
+    setPartialText("");
+    setSourceActivityRms(0);
+  }, [cleanupMediaSource, stopAnalyser]);
+
+  useEffect(() => {
     worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
       if (data.type === "ready") {
+        isWorkerReadyRef.current = true;
+        workerReadyResolveRef.current?.();
+        workerReadyResolveRef.current = null;
+        workerReadyRejectRef.current = null;
+        workerReadyPromiseRef.current = null;
         isModelCachedRef.current = true;
         hasCheckedModelCacheRef.current = true;
         setIsModelLoading(false);
@@ -304,6 +402,13 @@ export function useTranscriber(settings: RuntimeSettings) {
         setProgress("");
         setIsModelCached(true);
         setModelCacheStatus("Whisper model cached locally.");
+      }
+
+      if (data.type === "idle") {
+        workerIdleResolveRef.current?.();
+        workerIdleResolveRef.current = null;
+        workerIdleRejectRef.current = null;
+        workerIdlePromiseRef.current = null;
       }
 
       if (data.type === "progress") {
@@ -339,8 +444,9 @@ export function useTranscriber(settings: RuntimeSettings) {
 
           const next = [...current];
           const previous = next.at(-1) ?? "";
-          if (previous.endsWith(normalized)) return current;
-          next[next.length - 1] = `${previous} ${normalized}`.trim();
+          const merged = mergeTranscriptText(previous, normalized);
+          if (merged === previous) return current;
+          next[next.length - 1] = merged;
           return next;
         });
       }
@@ -366,9 +472,17 @@ export function useTranscriber(settings: RuntimeSettings) {
       }
 
       if (data.type === "error") {
+        isWorkerReadyRef.current = false;
+        workerReadyRejectRef.current?.(new Error(data.message));
+        workerReadyResolveRef.current = null;
+        workerReadyRejectRef.current = null;
+        workerReadyPromiseRef.current = null;
+        workerIdleRejectRef.current?.(new Error(data.message));
+        workerIdleResolveRef.current = null;
+        workerIdleRejectRef.current = null;
+        workerIdlePromiseRef.current = null;
         setIsModelLoading(false);
-        setIsPreparing(false);
-        setIsRecording(false);
+        resetCaptureState();
         setError(data.message);
       }
     };
@@ -376,25 +490,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     return () => {
       worker.terminate();
     };
-  }, [worker]);
-
-  useEffect(() => {
-    worker.postMessage({ type: "cache-status" });
-  }, [worker]);
-
-  const stopPlayback = useCallback(() => {
-    if (playbackTimerRef.current !== null) {
-      window.clearTimeout(playbackTimerRef.current);
-      playbackTimerRef.current = null;
-    }
-
-    playbackNodeRef.current?.port.postMessage({ type: "clear" });
-    playbackNodeRef.current?.disconnect();
-    playbackNodeRef.current = null;
-    playbackContextRef.current?.close();
-    playbackContextRef.current = null;
-    setIsPlayingRecording(false);
-  }, []);
+  }, [resetCaptureState, worker]);
 
   useEffect(() => {
     return () => {
@@ -405,30 +501,6 @@ export function useTranscriber(settings: RuntimeSettings) {
       disposeWaveformWorker();
     };
   }, [cleanupMediaSource, cleanupMicrophoneCapture, disposeWaveformWorker, stopAnalyser, stopPlayback]);
-
-  const stop = useCallback(() => {
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current = null;
-    cleanupMicrophoneCapture();
-    cleanupMediaSource();
-    stopAnalyser();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    audioContextRef.current?.close();
-    audioContextRef.current = null;
-    tailRef.current = new Float32Array();
-    latestVoiceRef.current = {
-      hasSpeech: false,
-      score: 0,
-      trailingSilenceMs: 0,
-      mode: "unknown"
-    };
-    nextSegmentStartsParagraphRef.current = false;
-    setIsRecording(false);
-    setIsTranscribingMedia(false);
-    setPartialText("");
-    worker.postMessage({ type: "flush" });
-  }, [cleanupMediaSource, cleanupMicrophoneCapture, stopAnalyser, worker]);
 
   const startOpfsRecording = useCallback(
     async (mimeType: string) => {
@@ -520,25 +592,112 @@ export function useTranscriber(settings: RuntimeSettings) {
 
   const processPcmChunk = useCallback(
     async (mono: Float32Array, sampleRate: number) => {
-      const voice = await detectVoiceActivity(mono, sampleRate, settings.vad);
+      const voice = await detectVoiceActivity(
+        mono,
+        sampleRate,
+        settings.vad,
+        settings.vad.mode === "adaptive-rms" ? adaptiveVadStateRef.current : undefined
+      );
       latestVoiceRef.current = voice;
+      const targetSamples = getSamplesForMs(sampleRate, settings.audio.transcriptionChunkMs);
+      const paragraphSilenceSamples = getSamplesForMs(sampleRate, settings.vad.paragraphSilenceMs);
 
-      if (!voice.hasSpeech) {
+      if (voice.hasSpeech) {
+        if (liveSpeechBufferedSamplesRef.current === 0) {
+          liveSpeechStartsParagraphRef.current = nextSegmentStartsParagraphRef.current;
+          nextSegmentStartsParagraphRef.current = false;
+        }
+        appendAudioChunk(
+          liveSpeechChunksRef.current,
+          liveSpeechBufferedSamplesRef,
+          mono
+        );
+
+        if (liveSpeechBufferedSamplesRef.current >= targetSamples) {
+          const speechAudio = consumeBufferedAudio(
+            liveSpeechChunksRef.current,
+            liveSpeechBufferedSamplesRef
+          );
+          const audio = concatAudio(tailRef.current, speechAudio);
+          const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
+          tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+
+          worker.postMessage(
+            {
+              type: "transcribe",
+              audio,
+              sampleRate,
+              isFinal: false,
+              startsNewParagraph: liveSpeechStartsParagraphRef.current
+            },
+            [audio.buffer]
+          );
+          liveSpeechStartsParagraphRef.current = false;
+        }
+
+        return voice;
+      }
+
+      if (liveSpeechBufferedSamplesRef.current > 0) {
+        appendAudioChunk(
+          liveSpeechChunksRef.current,
+          liveSpeechBufferedSamplesRef,
+          mono
+        );
+
+        if (
+          voice.trailingSilenceMs >= settings.vad.paragraphSilenceMs ||
+          liveSpeechBufferedSamplesRef.current >= targetSamples + paragraphSilenceSamples
+        ) {
+          const speechAudio = consumeBufferedAudio(
+            liveSpeechChunksRef.current,
+            liveSpeechBufferedSamplesRef
+          );
+          const audio = concatAudio(tailRef.current, speechAudio);
+          const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
+          tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+
+          worker.postMessage(
+            {
+              type: "transcribe",
+              audio,
+              sampleRate,
+              isFinal: false,
+              startsNewParagraph: liveSpeechStartsParagraphRef.current
+            },
+            [audio.buffer]
+          );
+          liveSpeechStartsParagraphRef.current = false;
+
+          if (hasTranscriptRef.current) {
+            nextSegmentStartsParagraphRef.current = true;
+          }
+          setPartialText("");
+        }
+      } else {
         if (hasTranscriptRef.current) {
           nextSegmentStartsParagraphRef.current = true;
         }
         setPartialText("");
-        return voice;
       }
 
+      return voice;
+    },
+    [settings, worker]
+  );
+
+  const processUploadedPcmChunk = useCallback(
+    async (
+      mono: Float32Array,
+      sampleRate: number,
+      startsNewParagraph: boolean,
+      overlapMs = 0
+    ) => {
+      if (mono.length === 0) return;
+
       const audio = concatAudio(tailRef.current, mono);
-      const overlapSamples = Math.floor(
-        sampleRate * (settings.audio.overlapMs / 1000)
-      );
+      const overlapSamples = Math.floor(sampleRate * (overlapMs / 1000));
       tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
-      const startsNewParagraph = nextSegmentStartsParagraphRef.current;
-      nextSegmentStartsParagraphRef.current =
-        voice.trailingSilenceMs >= settings.vad.paragraphSilenceMs;
 
       worker.postMessage(
         {
@@ -550,11 +709,70 @@ export function useTranscriber(settings: RuntimeSettings) {
         },
         [audio.buffer]
       );
-
-      return voice;
     },
-    [settings, worker]
+    [worker]
   );
+
+  const flushMicrophonePcmCapture = useCallback(
+    async (sampleRate: number) => {
+      const pendingQueue = microphoneProcessQueueRef.current;
+
+      microphoneProcessorNodeRef.current?.port.close();
+      microphoneProcessorNodeRef.current?.disconnect();
+      microphoneProcessorNodeRef.current = null;
+      microphoneSilentGainRef.current?.disconnect();
+      microphoneSilentGainRef.current = null;
+      microphoneSourceRef.current?.disconnect();
+      microphoneSourceRef.current = null;
+
+      await pendingQueue;
+
+      const finalChunk = consumeBufferedAudio(
+        microphonePcmChunksRef.current,
+        microphonePcmBufferedSamplesRef
+      );
+      microphoneProcessQueueRef.current = Promise.resolve();
+
+      if (finalChunk.length > 0) {
+        await processPcmChunk(finalChunk, sampleRate);
+      }
+
+      if (liveSpeechBufferedSamplesRef.current > 0) {
+        const speechAudio = consumeBufferedAudio(
+          liveSpeechChunksRef.current,
+          liveSpeechBufferedSamplesRef
+        );
+        const audio = concatAudio(tailRef.current, speechAudio);
+        const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
+        tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+        worker.postMessage(
+          {
+            type: "transcribe",
+            audio,
+            sampleRate,
+            isFinal: true,
+            startsNewParagraph: liveSpeechStartsParagraphRef.current
+          },
+          [audio.buffer]
+        );
+        liveSpeechStartsParagraphRef.current = false;
+      }
+    },
+    [processPcmChunk, settings.audio.overlapMs, worker]
+  );
+
+  const stop = useCallback(async () => {
+    const sampleRate = audioContextRef.current?.sampleRate ?? 16000;
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    try {
+      await flushMicrophonePcmCapture(sampleRate);
+      await waitForWorkerIdle();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to finish live transcription.");
+    }
+    resetCaptureState();
+  }, [flushMicrophonePcmCapture, resetCaptureState, waitForWorkerIdle]);
 
   const startMicrophonePcmCapture = useCallback(
     async (stream: MediaStream, audioContext: AudioContext) => {
@@ -570,7 +788,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       const silentGain = audioContext.createGain();
       const chunkSamples = Math.max(
         1,
-        Math.floor(audioContext.sampleRate * (settings.audio.transcriptionChunkMs / 1000))
+        Math.floor(audioContext.sampleRate * (LIVE_ANALYSIS_CHUNK_MS / 1000))
       );
 
       silentGain.gain.value = 0;
@@ -585,16 +803,20 @@ export function useTranscriber(settings: RuntimeSettings) {
       processor.port.onmessage = (event: MessageEvent<{ type?: string; samples?: Float32Array }>) => {
         if (event.data?.type !== "samples" || !event.data.samples) return;
 
-        microphonePcmBufferRef.current = concatAudio(
-          microphonePcmBufferRef.current,
+        appendAudioChunk(
+          microphonePcmChunksRef.current,
+          microphonePcmBufferedSamplesRef,
           event.data.samples
         );
 
         microphoneProcessQueueRef.current = microphoneProcessQueueRef.current
           .then(async () => {
-            while (microphonePcmBufferRef.current.length >= chunkSamples) {
-              const chunk = microphonePcmBufferRef.current.slice(0, chunkSamples);
-              microphonePcmBufferRef.current = microphonePcmBufferRef.current.slice(chunkSamples);
+            while (microphonePcmBufferedSamplesRef.current >= chunkSamples) {
+              const chunk = consumeBufferedAudio(
+                microphonePcmChunksRef.current,
+                microphonePcmBufferedSamplesRef,
+                chunkSamples
+              );
               await processPcmChunk(chunk, audioContext.sampleRate);
             }
           })
@@ -603,28 +825,28 @@ export function useTranscriber(settings: RuntimeSettings) {
           });
       };
     },
-    [cleanupMicrophoneCapture, processPcmChunk, settings.audio.transcriptionChunkMs]
+    [cleanupMicrophoneCapture, processPcmChunk]
   );
 
   const start = useCallback(async () => {
     setError("");
+    setIsPreparing(true);
 
-    if (!isWebGpuAvailable) {
+    if (!isTranscriptionSupported) {
+      setIsPreparing(false);
       setError("This prototype requires a browser with WebGPU enabled.");
       return;
     }
 
     try {
-      setIsPreparing(true);
       latestVoiceRef.current = {
         hasSpeech: false,
         score: 0,
         trailingSilenceMs: 0,
         mode: "unknown"
       };
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: getMicrophoneConstraints(settings)
-      });
+      adaptiveVadStateRef.current = { noiseFloor: null };
+      const stream = await getMicrophoneStream(settings);
       streamRef.current = stream;
       const audioContext = new AudioContext({ sampleRate: 16000 });
       audioContextRef.current = audioContext;
@@ -667,23 +889,24 @@ export function useTranscriber(settings: RuntimeSettings) {
       }
       setMediaTranscriptionProgress(0);
       setIsRecording(true);
-    } catch (cause) {
-      stop();
       setIsPreparing(false);
+    } catch (cause) {
+      resetCaptureState();
+      worker.postMessage({ type: "flush" });
       setError(cause instanceof Error ? cause.message : "Unable to access the microphone.");
     }
   }, [
-    isWebGpuAvailable,
+    isTranscriptionSupported,
     isOpfsRecordingAvailable,
     opfsChunkMs,
     settings,
     finalizeCurrentPart,
+    resetCaptureState,
     shouldRecordToOpfs,
     startAnalyser,
     startMicrophonePcmCapture,
     startOpfsRecording,
     storeMediaRecorderChunk,
-    stop,
     worker
   ]);
 
@@ -707,6 +930,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       audioContextRef.current = audioContext;
       const decoded = await audioContext.decodeAudioData(await file.arrayBuffer());
       const mono = toMono(decoded);
+      let startsNewParagraph = false;
       let offset = 0;
 
       while (offset < mono.length) {
@@ -719,17 +943,18 @@ export function useTranscriber(settings: RuntimeSettings) {
         );
         if (end === null) break;
         const chunk = mono.slice(offset, end);
-        await processPcmChunk(chunk, decoded.sampleRate);
+        await processUploadedPcmChunk(chunk, decoded.sampleRate, startsNewParagraph);
+        startsNewParagraph = true;
         offset = end;
-        const percent = Math.round((offset / mono.length) * 100);
+        const percent = Math.round((end / mono.length) * 100);
         setMediaTranscriptionProgress(percent);
         setProgress(`Transcribing ${file.name} ${percent}%`);
       }
 
       setMediaTranscriptionProgress(100);
-      worker.postMessage({ type: "flush" });
+      await waitForWorkerIdle();
     },
-    [processPcmChunk, settings, worker]
+    [processUploadedPcmChunk, settings, waitForWorkerIdle]
   );
 
   const transcribePlayableMediaFile = useCallback(
@@ -749,6 +974,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       let buffered = new Float32Array();
       let processQueue = Promise.resolve();
       let isEnded = false;
+      let startsNewParagraph = false;
 
       mediaElementRef.current = media;
       mediaObjectUrlRef.current = objectUrl;
@@ -776,19 +1002,21 @@ export function useTranscriber(settings: RuntimeSettings) {
 
         processQueue = processQueue.then(async () => {
           while (buffered.length >= minChunkSamples) {
-            const splitEnd = await getUploadedMediaSplitEnd(
+            const splitEnd = await getBufferedUploadedMediaSplitEnd(
               buffered,
-              0,
               audioContext.sampleRate,
               settings,
-              false
+              minChunkSamples
             );
             if (splitEnd === null) break;
 
             const chunk = buffered.slice(0, splitEnd);
             buffered = buffered.slice(splitEnd);
-            await processPcmChunk(chunk, audioContext.sampleRate);
+            await processUploadedPcmChunk(chunk, audioContext.sampleRate, startsNewParagraph);
+            startsNewParagraph = true;
           }
+        }).catch((cause) => {
+          setError(cause instanceof Error ? cause.message : "Unable to continue media transcription.");
         });
       };
 
@@ -807,13 +1035,13 @@ export function useTranscriber(settings: RuntimeSettings) {
             const finalChunk = buffered;
             buffered = new Float32Array();
             processQueue = processQueue.then(async () => {
-              await processPcmChunk(finalChunk, audioContext.sampleRate);
+              await processUploadedPcmChunk(finalChunk, audioContext.sampleRate, startsNewParagraph);
             });
           }
           void processQueue
-            .then(() => {
+            .then(async () => {
+              await waitForWorkerIdle();
               setMediaTranscriptionProgress(100);
-              worker.postMessage({ type: "flush" });
               resolve();
             })
             .catch(reject);
@@ -823,12 +1051,12 @@ export function useTranscriber(settings: RuntimeSettings) {
         };
       });
     },
-    [processPcmChunk, settings, worker]
+    [processUploadedPcmChunk, settings, waitForWorkerIdle]
   );
 
   const transcribeMediaFile = useCallback(
     async (file: File) => {
-      if (!isWebGpuAvailable) {
+      if (!isTranscriptionSupported) {
         setError("This prototype requires a browser with WebGPU enabled.");
         return;
       }
@@ -846,7 +1074,7 @@ export function useTranscriber(settings: RuntimeSettings) {
           hasCheckedModelCache ? "Checking model files..." : "Checking model cache..."
         );
       }
-      worker.postMessage({ type: "load" });
+      await ensureWorkerReady();
 
       try {
         if (file.type.startsWith("audio/")) {
@@ -874,7 +1102,8 @@ export function useTranscriber(settings: RuntimeSettings) {
     },
     [
       cleanupMediaSource,
-      isWebGpuAvailable,
+      ensureWorkerReady,
+      isTranscriptionSupported,
       stopAnalyser,
       transcribeAudioFile,
       transcribePlayableMediaFile,
@@ -1012,7 +1241,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     isPreparing,
     isRecording,
     isTranscribingMedia,
-    isWebGpuAvailable,
+    isTranscriptionSupported,
     mediaFileName,
     opfsChunkCount,
     opfsChunkMs,
@@ -1048,6 +1277,47 @@ function getSupportedMimeType() {
   return types.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
 }
 
+async function findDedicatedVadBoundaryEnd(
+  audio: Float32Array,
+  segmentStart: number,
+  searchStart: number,
+  searchEnd: number,
+  sampleRate: number,
+  settings: RuntimeSettings
+) {
+  if (isUploadedBoundaryVadUnavailable) return null;
+
+  const requiredQuietSamples = getSamplesForMs(
+    sampleRate,
+    Math.max(settings.vad.paragraphSilenceMs, settings.audio.overlapMs)
+  );
+
+  try {
+    return await withTimeout(
+      findVadBoundaryEnd(
+        audio,
+        segmentStart,
+        searchStart,
+        searchEnd,
+        sampleRate,
+        requiredQuietSamples
+      ),
+      UPLOADED_MEDIA_BOUNDARY_TIMEOUT_MS
+    );
+  } catch (cause) {
+    isUploadedBoundaryVadUnavailable = true;
+    console.warn(
+      "Dedicated upload VAD boundary detection failed; falling back to fixed media chunks.",
+      cause
+    );
+    return null;
+  }
+}
+
+function getSamplesForMs(sampleRate: number, ms: number) {
+  return Math.max(1, Math.floor(sampleRate * (ms / 1000)));
+}
+
 async function getUploadedMediaSplitEnd(
   audio: Float32Array,
   offset: number,
@@ -1057,10 +1327,9 @@ async function getUploadedMediaSplitEnd(
 ) {
   const remainingSamples = audio.length - offset;
   const minSamples = getSamplesForMs(sampleRate, UPLOADED_MEDIA_MIN_CHUNK_MS);
-  const targetSamples = getSamplesForMs(sampleRate, UPLOADED_MEDIA_TARGET_CHUNK_MS);
   const maxSamples = getSamplesForMs(
     sampleRate,
-    Math.max(UPLOADED_MEDIA_TARGET_CHUNK_MS, WHISPER_CONTEXT_MS - settings.audio.overlapMs)
+    Math.max(UPLOADED_MEDIA_TARGET_CHUNK_MS, WHISPER_CONTEXT_MS)
   );
 
   if (remainingSamples <= 0) return offset;
@@ -1070,7 +1339,14 @@ async function getUploadedMediaSplitEnd(
 
   const searchStart = offset + minSamples;
   const searchEnd = Math.min(audio.length, offset + maxSamples);
-  const quietEnd = await findDedicatedVadBoundaryEnd(audio, offset, searchStart, searchEnd, sampleRate, settings);
+  const quietEnd = await findDedicatedVadBoundaryEnd(
+    audio,
+    offset,
+    searchStart,
+    searchEnd,
+    sampleRate,
+    settings
+  );
   if (quietEnd !== null) return quietEnd;
 
   if (remainingSamples >= maxSamples) {
@@ -1081,31 +1357,119 @@ async function getUploadedMediaSplitEnd(
   return null;
 }
 
-async function findDedicatedVadBoundaryEnd(
+async function getBufferedUploadedMediaSplitEnd(
   audio: Float32Array,
-  segmentStart: number,
-  searchStart: number,
-  searchEnd: number,
   sampleRate: number,
-  settings: RuntimeSettings
+  settings: RuntimeSettings,
+  minSamples: number
 ) {
-  const requiredQuietSamples = getSamplesForMs(
-    sampleRate,
-    Math.max(settings.vad.paragraphSilenceMs, settings.audio.overlapMs)
-  );
+  if (audio.length < minSamples) return null;
 
-  return findVadBoundaryEnd(
-    audio,
-    segmentStart,
-    searchStart,
-    searchEnd,
-    sampleRate,
-    requiredQuietSamples
-  );
+  const targetSamples = getSamplesForMs(sampleRate, UPLOADED_MEDIA_TARGET_CHUNK_MS);
+  const searchStart = minSamples;
+  const searchEnd = Math.min(audio.length, targetSamples);
+
+  if (searchEnd > searchStart) {
+    const quietEnd = await findDedicatedVadBoundaryEnd(
+      audio,
+      0,
+      searchStart,
+      searchEnd,
+      sampleRate,
+      settings
+    );
+    if (quietEnd !== null) return quietEnd;
+  }
+
+  if (audio.length >= targetSamples) {
+    return targetSamples;
+  }
+
+  return null;
 }
 
-function getSamplesForMs(sampleRate: number, ms: number) {
-  return Math.max(1, Math.floor(sampleRate * (ms / 1000)));
+function appendAudioChunk(
+  chunks: Float32Array[],
+  sampleCountRef: { current: number },
+  chunk: Float32Array
+) {
+  if (chunk.length === 0) return;
+  chunks.push(chunk);
+  sampleCountRef.current += chunk.length;
+}
+
+function consumeBufferedAudio(
+  chunks: Float32Array[],
+  sampleCountRef: { current: number },
+  maxSamples = sampleCountRef.current
+) {
+  const targetSamples = Math.max(0, Math.min(sampleCountRef.current, maxSamples));
+  if (targetSamples === 0) return new Float32Array();
+
+  const output = new Float32Array(targetSamples);
+  let writeOffset = 0;
+
+  while (writeOffset < targetSamples && chunks.length > 0) {
+    const chunk = chunks[0];
+    const remaining = targetSamples - writeOffset;
+
+    if (chunk.length <= remaining) {
+      output.set(chunk, writeOffset);
+      writeOffset += chunk.length;
+      chunks.shift();
+      continue;
+    }
+
+    output.set(chunk.subarray(0, remaining), writeOffset);
+    chunks[0] = chunk.subarray(remaining);
+    writeOffset += remaining;
+  }
+
+  sampleCountRef.current -= targetSamples;
+  return output;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error(`Timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (cause) => {
+        window.clearTimeout(timeoutId);
+        reject(cause);
+      }
+    );
+  });
+}
+
+function mergeTranscriptText(previous: string, incoming: string) {
+  const left = previous.trim();
+  const right = incoming.trim();
+
+  if (!left) return right;
+  if (!right) return left;
+  if (left.endsWith(right)) return left;
+  if (right.startsWith(left)) return right;
+
+  const leftWords = left.split(/\s+/);
+  const rightWords = right.split(/\s+/);
+  const maxOverlap = Math.min(leftWords.length, rightWords.length, 24);
+
+  for (let size = maxOverlap; size >= 2; size -= 1) {
+    const leftTail = leftWords.slice(-size).join(" ").toLowerCase();
+    const rightHead = rightWords.slice(0, size).join(" ").toLowerCase();
+    if (leftTail === rightHead) {
+      return `${left} ${rightWords.slice(size).join(" ")}`.trim();
+    }
+  }
+
+  return `${left} ${right}`.trim();
 }
 
 function getMicrophoneConstraints(settings: RuntimeSettings): MediaTrackConstraints {
@@ -1118,4 +1482,32 @@ function getMicrophoneConstraints(settings: RuntimeSettings): MediaTrackConstrai
     noiseSuppression: settings.microphone.noiseSuppression,
     autoGainControl: settings.microphone.autoGainControl
   };
+}
+
+async function getMicrophoneStream(settings: RuntimeSettings) {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: getMicrophoneConstraints(settings)
+    });
+  } catch (cause) {
+    if (!shouldRetryWithDefaultMicrophone(cause, settings.microphone.deviceId)) {
+      throw cause;
+    }
+
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: settings.microphone.echoCancellation,
+        noiseSuppression: settings.microphone.noiseSuppression,
+        autoGainControl: settings.microphone.autoGainControl
+      }
+    });
+  }
+}
+
+function shouldRetryWithDefaultMicrophone(cause: unknown, deviceId: string) {
+  if (!deviceId) return false;
+  if (!(cause instanceof DOMException)) return false;
+
+  return cause.name === "NotFoundError" || cause.name === "OverconstrainedError";
 }

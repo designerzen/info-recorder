@@ -359,10 +359,10 @@ export const settingsOptions: SettingsOption[] = [
     section: "transcript",
     label: "Transcript scroll speed",
     kind: "slider",
-    min: 2,
-    max: 26,
+    min: 1,
+    max: 10,
     step: 1,
-    valueLabel: (value) => `${Math.round(value)} px/s`,
+    valueLabel: (value) => `${Math.round(value)}/10`,
     getValue: (settings) => settings.transcript.autoScrollSpeed,
     setValue: (settings, value) => ({
       ...settings,

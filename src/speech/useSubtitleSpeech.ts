@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { appSettings, type SupertonicVoiceId, type TtsProvider } from "../config/settings";
 import type { RuntimeTtsSettings } from "../config/settingsOptions";
+import { splitSpeechPhrases } from "./subtitlePhrases";
 
 export type SubtitleVoiceOption = {
   id: string;
@@ -16,9 +17,13 @@ export function useSubtitleSpeech(
 ) {
   const spokenTextRef = useRef("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const speechRunRef = useRef(0);
+  const pendingTimeoutRef = useRef<number | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechStatus, setSpeechStatus] = useState("");
+  const [activePhraseIndex, setActivePhraseIndex] = useState(-1);
+  const [activePhraseText, setActivePhraseText] = useState("");
   const [webSpeechVoices, setWebSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
   const isSpeechEnabled = settings.enabled;
   const provider = settings.provider;
@@ -44,6 +49,10 @@ export function useSubtitleSpeech(
 
   const stopSpeaking = useCallback(() => {
     speechRunRef.current += 1;
+    if (pendingTimeoutRef.current !== null) {
+      window.clearTimeout(pendingTimeoutRef.current);
+      pendingTimeoutRef.current = null;
+    }
     if (isSpeechSupported) {
       window.speechSynthesis.cancel();
     }
@@ -52,8 +61,14 @@ export function useSubtitleSpeech(
       audioRef.current.src = "";
       audioRef.current = null;
     }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
     setIsSpeaking(false);
     setSpeechStatus("");
+    setActivePhraseIndex(-1);
+    setActivePhraseText("");
   }, [isSpeechSupported]);
 
   useEffect(() => {
@@ -84,93 +99,151 @@ export function useSubtitleSpeech(
   }, [provider, selectedVoiceId, setSelectedVoiceId, webSpeechVoices]);
 
   const speakWithWebSpeech = useCallback(
-    (normalized: string) => {
+    (phrases: string[], runId: number) => {
       if (!isSpeechSupported) return;
 
       const nativeVoice = webSpeechVoices.find((voice) => voice.voiceURI === selectedVoiceId);
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(normalized);
-      utterance.lang = nativeVoice?.lang ?? appSettings.tts.lang;
-      utterance.voice = nativeVoice ?? null;
-      utterance.rate = settings.rate;
-      utterance.pitch = settings.pitch;
-      utterance.volume = settings.volume;
-      utterance.onstart = () => {
-        setSpeechStatus(nativeVoice ? `Speaking with ${nativeVoice.name}.` : "Speaking with browser voice.");
-        setIsSpeaking(true);
+      if (phrases.length === 0) return;
+
+      let phraseIndex = 0;
+      const speakNext = () => {
+        if (speechRunRef.current !== runId) return;
+        const phrase = phrases[phraseIndex];
+        if (!phrase) {
+          setIsSpeaking(false);
+          setSpeechStatus("");
+          setActivePhraseIndex(-1);
+          setActivePhraseText("");
+          return;
+        }
+
+        setActivePhraseIndex(phraseIndex);
+        setActivePhraseText(phrase.trim());
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(phrase.trim());
+        utterance.lang = nativeVoice?.lang ?? appSettings.tts.lang;
+        utterance.voice = nativeVoice ?? null;
+        utterance.rate = settings.rate;
+        utterance.pitch = settings.pitch;
+        utterance.volume = settings.volume;
+        utterance.onstart = () => {
+          setSpeechStatus(
+            nativeVoice
+              ? `Speaking phrase ${phraseIndex + 1}/${phrases.length} with ${nativeVoice.name}.`
+              : `Speaking phrase ${phraseIndex + 1}/${phrases.length} with browser voice.`
+          );
+          setIsSpeaking(true);
+        };
+        utterance.onend = () => {
+          if (speechRunRef.current !== runId) return;
+          phraseIndex += 1;
+          pendingTimeoutRef.current = window.setTimeout(() => {
+            pendingTimeoutRef.current = null;
+            speakNext();
+          }, 0);
+        };
+        utterance.onerror = () => {
+          if (speechRunRef.current !== runId) return;
+          setIsSpeaking(false);
+          setSpeechStatus("Browser speech synthesis failed.");
+          setActivePhraseIndex(-1);
+          setActivePhraseText("");
+        };
+        window.speechSynthesis.speak(utterance);
       };
-      utterance.onend = () => {
-        setIsSpeaking(false);
-        setSpeechStatus("");
-      };
-      utterance.onerror = () => {
-        setIsSpeaking(false);
-        setSpeechStatus("Browser speech synthesis failed.");
-      };
-      window.speechSynthesis.speak(utterance);
+
+      speakNext();
     },
     [isSpeechSupported, selectedVoiceId, settings.pitch, settings.rate, settings.volume, webSpeechVoices]
   );
 
   const speakWithSupertonic = useCallback(
-    async (normalized: string, runId: number) => {
+    async (phrases: string[], runId: number) => {
       try {
-        setIsSpeaking(true);
-        setSpeechStatus(`Generating ${selectedVoiceId} with Supertonic WebGPU TTS.`);
         const { synthesizeSupertonicSpeech } = await import("./supertonicTts");
         const voiceId = appSettings.tts.supertonic.voices.some((voice) => voice.id === selectedVoiceId)
           ? (selectedVoiceId as SupertonicVoiceId)
           : appSettings.tts.supertonic.defaultVoiceId;
-        const blob = await synthesizeSupertonicSpeech(normalized, voiceId);
-        if (speechRunRef.current !== runId) return;
+        if (phrases.length === 0) return;
 
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        audio.onplay = () => setSpeechStatus(`Speaking with Supertonic ${selectedVoiceId}.`);
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          if (audioRef.current === audio) {
-            audioRef.current = null;
+        const playPhrase = async (phraseIndex: number): Promise<void> => {
+          if (speechRunRef.current !== runId) return;
+          const phrase = phrases[phraseIndex];
+          if (!phrase) {
+            setIsSpeaking(false);
+            setSpeechStatus("");
+            setActivePhraseIndex(-1);
+            setActivePhraseText("");
+            return;
           }
-          setIsSpeaking(false);
-          setSpeechStatus("");
+
+          setActivePhraseIndex(phraseIndex);
+          setActivePhraseText(phrase.trim());
+          setIsSpeaking(true);
+          setSpeechStatus(`Generating phrase ${phraseIndex + 1}/${phrases.length} with Supertonic ${selectedVoiceId}.`);
+          const blob = await synthesizeSupertonicSpeech(phrase.trim(), voiceId);
+          if (speechRunRef.current !== runId) return;
+
+          const url = URL.createObjectURL(blob);
+          audioUrlRef.current = url;
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audio.onplay = () => setSpeechStatus(`Speaking phrase ${phraseIndex + 1}/${phrases.length} with Supertonic ${selectedVoiceId}.`);
+          audio.onended = () => {
+            if (audioUrlRef.current) {
+              URL.revokeObjectURL(audioUrlRef.current);
+              audioUrlRef.current = null;
+            }
+            if (audioRef.current === audio) {
+              audioRef.current = null;
+            }
+            void playPhrase(phraseIndex + 1);
+          };
+          audio.onerror = () => {
+            if (audioUrlRef.current) {
+              URL.revokeObjectURL(audioUrlRef.current);
+              audioUrlRef.current = null;
+            }
+            setIsSpeaking(false);
+            setSpeechStatus("Supertonic audio playback failed.");
+            setActivePhraseIndex(-1);
+            setActivePhraseText("");
+          };
+          await audio.play();
         };
-        audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          setIsSpeaking(false);
-          setSpeechStatus("Supertonic audio playback failed.");
-        };
-        await audio.play();
+
+        await playPhrase(0);
       } catch (error) {
         if (speechRunRef.current !== runId) return;
         setIsSpeaking(false);
         setSpeechStatus(error instanceof Error ? error.message : "Supertonic speech synthesis failed.");
+        setActivePhraseIndex(-1);
+        setActivePhraseText("");
       }
     },
     [selectedVoiceId]
   );
 
   const speak = useCallback(
-    (value: string) => {
+    (value: string, options?: { force?: boolean }) => {
       const normalized = value.trim();
-      if (!isSpeechEnabled || !isSelectedProviderSupported || !normalized) return;
-      if (normalized === spokenTextRef.current) return;
+      if (!isSelectedProviderSupported || !normalized) return;
+      if (!options?.force && normalized === spokenTextRef.current) return;
 
       spokenTextRef.current = normalized;
       stopSpeaking();
       const runId = speechRunRef.current;
+      const phrases = splitSpeechPhrases(normalized).map((phrase) => phrase.text);
 
       if (provider === "web-speech") {
-        speakWithWebSpeech(normalized);
+        speakWithWebSpeech(phrases, runId);
       } else {
-        void speakWithSupertonic(normalized, runId);
+        void speakWithSupertonic(phrases, runId);
       }
     },
     [
-      isSelectedProviderSupported,
-      isSpeechEnabled,
       provider,
+      isSelectedProviderSupported,
       speakWithSupertonic,
       speakWithWebSpeech,
       stopSpeaking
@@ -212,6 +285,8 @@ export function useSubtitleSpeech(
     isSpeechEnabled,
     isSpeechSupported: isSelectedProviderSupported,
     isSpeaking,
+    activePhraseIndex,
+    activePhraseText,
     provider,
     selectedVoiceId,
     speechStatus,
@@ -219,7 +294,8 @@ export function useSubtitleSpeech(
     setProvider,
     setIsSpeechEnabled,
     setSelectedVoiceId,
-    speakSubtitle: () => speak(text),
+    speakSubtitle: () => speak(text, { force: true }),
+    speakText: (value: string) => speak(value, { force: true }),
     stopSpeaking
   };
 }

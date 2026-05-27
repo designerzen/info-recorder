@@ -148,6 +148,7 @@ h2 {
 }
 
 .record-button,
+.speech-button,
 .upload-button,
 .settings-button {
   pointer-events: auto;
@@ -186,6 +187,11 @@ h2 {
 }
 
 .upload-button {
+  min-height: 56px;
+  padding: 0.8rem 1.1rem;
+}
+
+.speech-button {
   min-height: 56px;
   padding: 0.8rem 1.1rem;
 }
@@ -256,8 +262,8 @@ h2 {
 }
 
 .settings-dialog {
-  max-width: min(920px, calc(100vw - 2rem));
-  width: 920px;
+  max-width: min(1280px, calc(100vw - 2rem));
+  width: min(1280px, calc(100vw - 2rem));
 }
 
 .page-settings-header,
@@ -279,6 +285,7 @@ h2 {
 .page-settings-main {
   display: grid;
   gap: 0.85rem;
+  width: 100%;
 }
 
 .page-settings-actions,
@@ -286,6 +293,10 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
+}
+
+.page-settings-actions {
+  width: 100%;
 }
 
 .settings-tabs {
@@ -310,6 +321,7 @@ h2 {
   border: 1px solid var(--page-border, #d8ded4);
   border-radius: var(--page-radius, 8px);
   margin: 0;
+  min-width: 0;
   padding: 0.85rem;
 }
 
@@ -324,7 +336,7 @@ h2 {
 .page-settings-grid {
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
 }
 
 .model-dialog {
@@ -564,6 +576,21 @@ h2 {
   margin-top: 0.8rem;
 }
 
+.transcript-phrase {
+  border-radius: 0.4em;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+  white-space: break-spaces;
+}
+
+.transcript-phrase-active {
+  background: color-mix(in srgb, var(--page-accent, #15655a) 18%, transparent);
+  box-shadow: 0 0 0 0.14em color-mix(in srgb, var(--page-accent, #15655a) 28%, transparent);
+  color: color-mix(in srgb, var(--page-text, #18241e) 82%, var(--page-accent, #15655a));
+}
+
 .transcript-current-marker {
   display: inline-block;
   height: 1px;
@@ -616,8 +643,49 @@ h2 {
   padding: 0.35rem;
 }
 
+.scroll-toggle-button {
+  gap: 0.35rem;
+  padding-inline: 0.7rem;
+}
+
+.scroll-toggle-button[aria-pressed="false"] {
+  background: color-mix(in srgb, var(--page-surface, #ffffff) 72%, #d8ded4);
+}
+
+.scroll-gadget output {
+  min-width: 1.5rem;
+  text-align: center;
+}
+
 .app-shell[data-recording="true"] .scroll-gadget {
-  bottom: 60px;
+  bottom: 140px;
+}
+
+.waveform-strip {
+  background: color-mix(in srgb, var(--page-surface, #ffffff) 88%, transparent);
+  border-top: 1px solid var(--page-border, #cdd5c8);
+  bottom: 48px;
+  box-shadow: 0 -8px 24px rgba(19, 33, 27, 0.12);
+  height: 84px;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: fixed;
+  right: 0;
+  transform: translateY(12px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  z-index: 2;
+}
+
+.app-shell[data-recording="true"] .waveform-strip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.waveform-canvas {
+  display: block;
+  height: 100%;
+  width: 100%;
 }
 
 .activity-dock {
@@ -713,7 +781,9 @@ h2 {
 }
 
 .settings-body {
-  max-width: 520px;
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  width: 100%;
 }
 
 .color-control input {
@@ -730,6 +800,14 @@ h2 {
   align-items: stretch;
   display: grid;
   gap: 0.35rem;
+  min-width: 0;
+}
+
+.settings-control select,
+.settings-control input[type="number"],
+.settings-control input[type="range"] {
+  min-width: 0;
+  width: 100%;
 }
 
 .settings-control span {
@@ -742,6 +820,10 @@ h2 {
   display: flex;
   gap: 0.65rem;
   min-height: 40px;
+}
+
+.advanced-settings {
+  grid-column: 1 / -1;
 }
 
 .main-toggle {
@@ -869,6 +951,16 @@ h2 {
   }
 
   .settings-button span {
+    position: absolute;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .scroll-toggle-button span {
     position: absolute;
     clip: rect(0 0 0 0);
     clip-path: inset(50%);

@@ -8,6 +8,10 @@ export type VoiceActivity = {
   mode: string;
 };
 
+export type AdaptiveVadState = {
+  noiseFloor: number | null;
+};
+
 type AudioClassificationPipeline = AllTasks["audio-classification"];
 
 let mlDetectorPromise: Promise<AudioClassificationPipeline> | null = null;
@@ -15,7 +19,8 @@ let mlDetectorPromise: Promise<AudioClassificationPipeline> | null = null;
 export async function detectVoiceActivity(
   audio: Float32Array,
   sampleRate: number,
-  settings: AppSettings["vad"]
+  settings: AppSettings["vad"],
+  adaptiveState?: AdaptiveVadState
 ): Promise<VoiceActivity> {
   if (settings.mode === "fixed-rms") {
     return detectFixedRms(audio, sampleRate, settings);
@@ -29,25 +34,41 @@ export async function detectVoiceActivity(
     return detectWithTransformers(audio, sampleRate, settings);
   }
 
-  return detectAdaptiveRms(audio, sampleRate, settings);
+  return detectAdaptiveRms(audio, sampleRate, settings, adaptiveState);
 }
 
 function detectAdaptiveRms(
   audio: Float32Array,
   sampleRate: number,
-  settings: AppSettings["vad"]
+  settings: AppSettings["vad"],
+  adaptiveState?: AdaptiveVadState
 ): VoiceActivity {
   const rmsFrames = getRmsFrames(audio, sampleRate, settings.adaptiveRms.frameMs);
   const sorted = [...rmsFrames].sort((left, right) => left - right);
   const percentileIndex = Math.floor(sorted.length * settings.adaptiveRms.noisePercentile);
-  const noiseFloor = sorted[percentileIndex] ?? 0;
-  const threshold = Math.max(
-    settings.adaptiveRms.minRms,
-    noiseFloor * settings.adaptiveRms.noiseMultiplier
-  );
+  const observedNoiseFloor = sorted[percentileIndex] ?? 0;
+  const learnedNoiseFloor = adaptiveState?.noiseFloor;
+  const noiseFloor =
+    learnedNoiseFloor ?? Math.min(observedNoiseFloor, settings.adaptiveRms.minRms);
+  const threshold =
+    learnedNoiseFloor === null || learnedNoiseFloor === undefined
+      ? settings.adaptiveRms.minRms
+      : Math.max(settings.adaptiveRms.minRms, noiseFloor * settings.adaptiveRms.noiseMultiplier);
   const voicedFrames = rmsFrames.map((rms) => rms >= threshold);
+  const summary = summarizeFrames(voicedFrames, rmsFrames, settings, "adaptive-rms");
 
-  return summarizeFrames(voicedFrames, rmsFrames, settings, "adaptive-rms");
+  if (adaptiveState) {
+    if (summary.hasSpeech) {
+      adaptiveState.noiseFloor ??= noiseFloor;
+    } else {
+      adaptiveState.noiseFloor =
+        adaptiveState.noiseFloor === null
+          ? observedNoiseFloor
+          : adaptiveState.noiseFloor * 0.8 + observedNoiseFloor * 0.2;
+    }
+  }
+
+  return summary;
 }
 
 function detectFixedRms(

@@ -110,7 +110,7 @@ export const appSettings: AppSettings = {
     recordingExportFormat: "native"
   },
   transcript: {
-    autoScrollSpeed: 9
+    autoScrollSpeed: 5
   },
   transcription: {
     modelId: "onnx-community/whisper-tiny.en",
