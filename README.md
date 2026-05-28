@@ -87,11 +87,13 @@ recordings/
 ## Implementation Notes
 
 - The app requires WebGPU and passes `device: "webgpu"` to Transformers.js.
-- The current model is `onnx-community/whisper-tiny.en`.
+- The default model is `onnx-community/whisper-small.en`.
+- Settings expose the browser-safe Whisper sizes currently working in this app: English-only `tiny/base/small` and multilingual `tiny/base/small`.
 - `env.useBrowserCache = true` and `env.useWasmCache = true` are enabled in the transcription worker.
 - The worker checks `ModelRegistry.is_pipeline_cached_files(...)` for the exact WebGPU ASR pipeline and reports whether the model is cached.
-- VAD runs through `src/vad.ts` and is selected through `appSettings.vad.mode`.
-- Phrase parts are created when VAD sees low activity or a long trailing silence.
+- Live microphone transcription defaults to raw timed audio chunks. Activity detection can be enabled in settings when you want silence-aware chunking.
+- When enabled, VAD runs through `src/vad.ts` and is selected through `appSettings.vad.mode`.
+- Phrase parts are created when activity detection sees low activity or a long trailing silence.
 - ML VAD is optional and lazy-loaded, so the default build does not pull the model path into the initial UI bundle.
 - The waveform worker only draws. The main thread still reads `AnalyserNode` samples because Web Audio analyser nodes live in the main audio graph.
 - Stored audio chunks use the browser's selected `MediaRecorder` MIME type, usually WebM/Opus.

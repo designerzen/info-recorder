@@ -23,12 +23,13 @@ describe("settingsOptions regressions", () => {
 
   it("reads URL settings, clamps numbers, and ignores invalid options", () => {
     const settings = readSettingsFromUrl(
-      `?transcriptScrollSpeed=99&vad=fixed-rms&recordingFormat=mp3&transcriptionModel=onnx-community%2Fwhisper-base.en&voice=VoiceA&mic=mic-1&pageStyle=${encodeURIComponent(
+      `?transcriptScrollSpeed=99&activityDetection=1&vad=fixed-rms&recordingFormat=mp3&transcriptionModel=onnx-community%2Fwhisper-base.en&voice=VoiceA&mic=mic-1&pageStyle=${encodeURIComponent(
         JSON.stringify({ ...defaultPageStyle, textColor: "#abcdef" })
       )}&voiceEngine=not-real`
     );
 
     expect(settings.transcript.autoScrollSpeed).toBe(10);
+    expect(settings.vad.enabled).toBe(true);
     expect(settings.vad.mode).toBe("fixed-rms");
     expect(settings.audio.recordingExportFormat).toBe("mp3");
     expect(settings.transcription.modelId).toBe("onnx-community/whisper-base.en");
@@ -58,6 +59,7 @@ describe("settingsOptions regressions", () => {
 
   it("defaults to whisper small english and exposes the browser-safe model list", () => {
     expect(defaultRuntimeSettings.transcription.modelId).toBe("onnx-community/whisper-small.en");
+    expect(defaultRuntimeSettings.vad.enabled).toBe(false);
 
     const modelOption = settingsOptions.find((option) => option.key === "transcriptionModel");
     expect(modelOption?.kind).toBe("select");

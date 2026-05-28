@@ -602,6 +602,50 @@ export function useTranscriber(settings: RuntimeSettings) {
 
   const processPcmChunk = useCallback(
     async (mono: Float32Array, sampleRate: number) => {
+      if (!settings.vad.enabled) {
+        latestVoiceRef.current = {
+          hasSpeech: true,
+          score: 1,
+          trailingSilenceMs: 0,
+          mode: "raw-audio"
+        };
+
+        if (liveSpeechBufferedSamplesRef.current === 0) {
+          liveSpeechStartsParagraphRef.current = nextSegmentStartsParagraphRef.current;
+          nextSegmentStartsParagraphRef.current = false;
+        }
+        appendAudioChunk(
+          liveSpeechChunksRef.current,
+          liveSpeechBufferedSamplesRef,
+          mono
+        );
+
+        const targetSamples = getSamplesForMs(sampleRate, settings.audio.transcriptionChunkMs);
+        if (liveSpeechBufferedSamplesRef.current >= targetSamples) {
+          const speechAudio = consumeBufferedAudio(
+            liveSpeechChunksRef.current,
+            liveSpeechBufferedSamplesRef
+          );
+          const audio = concatAudio(tailRef.current, speechAudio);
+          const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
+          tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+
+          worker.postMessage(
+            {
+              type: "transcribe",
+              audio,
+              sampleRate,
+              isFinal: false,
+              startsNewParagraph: liveSpeechStartsParagraphRef.current
+            },
+            [audio.buffer]
+          );
+          liveSpeechStartsParagraphRef.current = false;
+        }
+
+        return latestVoiceRef.current;
+      }
+
       const voice = await detectVoiceActivity(
         mono,
         sampleRate,

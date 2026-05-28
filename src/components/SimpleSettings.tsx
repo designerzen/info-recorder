@@ -45,6 +45,7 @@ export function SimpleSettings({
   const echoCancellationOption = getOption("echoCancellation");
   const noiseSuppressionOption = getOption("noiseSuppression");
   const autoGainControlOption = getOption("autoGainControl");
+  const activityDetectionOption = getOption("activityDetection");
   const detectionOption = getOption("vad");
   const silenceOption = getActiveSilenceOption(settings);
   const recordOption = getOption("recordOpfs");
@@ -130,16 +131,26 @@ export function SimpleSettings({
         />
         <SettingControl
           disabled={disabled}
-          option={detectionOption}
+          option={activityDetectionOption}
           settings={settings}
           onUpdate={onUpdate}
         />
-        <SettingControl
-          disabled={disabled}
-          option={silenceOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
+        {settings.vad.enabled ? (
+          <>
+            <SettingControl
+              disabled={disabled}
+              option={detectionOption}
+              settings={settings}
+              onUpdate={onUpdate}
+            />
+            <SettingControl
+              disabled={disabled}
+              option={silenceOption}
+              settings={settings}
+              onUpdate={onUpdate}
+            />
+          </>
+        ) : null}
         <label className="settings-control checkbox-control">
           <input
             type="checkbox"
@@ -203,6 +214,7 @@ export function SimpleSettings({
                     echoCancellationOption.key,
                     noiseSuppressionOption.key,
                     autoGainControlOption.key,
+                    activityDetectionOption.key,
                     recordOption.key,
                     recordingFormatOption.key,
                     transcriptionModelOption.key,

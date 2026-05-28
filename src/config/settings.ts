@@ -45,6 +45,7 @@ export type AppSettings = {
     cacheModelOnFirstUse: boolean;
   };
   vad: {
+    enabled: boolean;
     mode: VadMode;
     minSpeechMs: number;
     paragraphSilenceMs: number;
@@ -128,6 +129,7 @@ export const appSettings: AppSettings = {
     cacheModelOnFirstUse: true
   },
   vad: {
+    enabled: false,
     mode: "adaptive-rms",
     minSpeechMs: 180,
     paragraphSilenceMs: 1200,

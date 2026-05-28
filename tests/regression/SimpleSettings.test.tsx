@@ -45,9 +45,18 @@ describe("SimpleSettings regressions", () => {
     expect(screen.queryByRole("dialog", { name: "User settings" })).not.toBeInTheDocument();
   });
 
-  it("shows the VAD-specific silence control for the active mode", async () => {
+  it("defaults to raw microphone audio and hides activity-specific controls", () => {
+    renderSettings();
+
+    expect(screen.getByLabelText("Use activity detection")).not.toBeChecked();
+    expect(screen.queryByLabelText("Detection method")).not.toBeInTheDocument();
+    expect(screen.queryByText("Adaptive silence floor")).not.toBeInTheDocument();
+  });
+
+  it("shows the VAD-specific silence control when activity detection is enabled", async () => {
     const user = userEvent.setup();
     const settings = cloneRuntimeSettings(defaultRuntimeSettings);
+    settings.vad.enabled = true;
     const onUpdate = vi.fn();
     renderSettings({ settings, onUpdate });
 

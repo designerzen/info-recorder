@@ -231,6 +231,17 @@ export const settingsOptions: SettingsOption[] = [
     })
   },
   {
+    key: "activityDetection",
+    section: "activity",
+    label: "Use activity detection",
+    kind: "checkbox",
+    getValue: (settings) => settings.vad.enabled,
+    setValue: (settings, value) => ({
+      ...settings,
+      vad: { ...settings.vad, enabled: value }
+    })
+  },
+  {
     key: "vad",
     section: "activity",
     label: "Detection method",
