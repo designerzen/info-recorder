@@ -87,8 +87,10 @@ recordings/
 ## Implementation Notes
 
 - The app requires WebGPU and passes `device: "webgpu"` to Transformers.js.
-- The default model is `onnx-community/whisper-small.en`.
-- Settings expose the browser-safe Whisper sizes currently working in this app: English-only `tiny/base/small` and multilingual `tiny/base/small`.
+- The default model is `onnx-community/whisper-small.en_timestamped`.
+- Settings expose timestamp-capable Whisper ONNX exports and Whisper WASM GGML models. ONNX models provide word timestamps through `return_timestamps: "word"` chunks; WASM GGML models provide segment start/end timestamps from `@timur00kh/whisper.wasm`.
+- Current ONNX choices are English-only `tiny/base/small/medium` timestamped, multilingual `tiny/base/small/medium` timestamped, and multilingual `large-v3-turbo` timestamped.
+- Current WASM choices are `tiny/base/small` English and multilingual, Q5 `tiny/base/small` English and multilingual, Q5 `medium` English and multilingual, and Q5 `large` multilingual.
 - `env.useBrowserCache = true` and `env.useWasmCache = true` are enabled in the transcription worker.
 - The worker checks `ModelRegistry.is_pipeline_cached_files(...)` for the exact WebGPU ASR pipeline and reports whether the model is cached.
 - Live microphone transcription defaults to raw timed audio chunks. Activity detection can be enabled in settings when you want silence-aware chunking.
