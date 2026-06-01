@@ -6,6 +6,7 @@ type PageStyleSheetProps = {
 
 export function PageStyleSheet({ settings }: PageStyleSheetProps) {
   const shadow = settings.pageShadow === "on" ? "0 16px 40px rgba(0, 0, 0, 0.18)" : "none";
+  const subtitleHighlightText = getReadableTextColor(settings.focusColor);
   const css = `
     :root {
       --page-text: ${settings.textColor};
@@ -25,6 +26,8 @@ export function PageStyleSheet({ settings }: PageStyleSheetProps) {
       --popup-radius: ${settings.popupRadius};
       --page-shadow: ${shadow};
       --focus-width: ${settings.focusWidth};
+      --subtitle-highlight-bg: ${settings.focusColor};
+      --subtitle-highlight-text: ${subtitleHighlightText};
     }
 
     body,
@@ -102,4 +105,31 @@ export function PageStyleSheet({ settings }: PageStyleSheetProps) {
   `;
 
   return <style data-page-style>{css}</style>;
+}
+
+function getReadableTextColor(backgroundColor: string) {
+  const rgb = parseHexColor(backgroundColor);
+  if (!rgb) return "#000000";
+  const luminance = getRelativeLuminance(rgb);
+  const contrastWithBlack = (luminance + 0.05) / 0.05;
+  const contrastWithWhite = 1.05 / (luminance + 0.05);
+  return contrastWithBlack >= contrastWithWhite ? "#000000" : "#ffffff";
+}
+
+function parseHexColor(value: string) {
+  const match = /^#([0-9a-fA-F]{6})$/.exec(value);
+  if (!match) return null;
+  const hex = match[1];
+  return {
+    red: Number.parseInt(hex.slice(0, 2), 16) / 255,
+    green: Number.parseInt(hex.slice(2, 4), 16) / 255,
+    blue: Number.parseInt(hex.slice(4, 6), 16) / 255
+  };
+}
+
+function getRelativeLuminance({ red, green, blue }: { red: number; green: number; blue: number }) {
+  const [r, g, b] = [red, green, blue].map((channel) =>
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  );
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }

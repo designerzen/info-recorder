@@ -3,11 +3,18 @@ import { useState } from "react";
 import { PageSettingsControls } from "./PageSettingsDialog";
 import type { PageStyleSettings } from "../config/pageStyle";
 import {
+  getTranscriptionModelOption,
   settingsOptions,
   transcriptionModelOptions,
   type RuntimeSettings,
   type SettingsOption
 } from "../config/settingsOptions";
+import {
+  estimateSecondsRemaining,
+  formatBytes,
+  formatDuration,
+  type ModelInventoryEntry
+} from "../recorder/modelInventory";
 
 type SimpleSettingsProps = {
   disabled: boolean;
@@ -15,6 +22,9 @@ type SimpleSettingsProps = {
   isOpfsAvailable: boolean;
   isSpeaking: boolean;
   microphoneDevices: MediaDeviceInfo[];
+  modelDownloadSpeedBps: number;
+  modelInventory: ModelInventoryEntry[];
+  modelInventoryMessage: string;
   selectedVoiceId: string;
   settings: RuntimeSettings;
   voiceOptions: Array<{ id: string; name: string }>;
@@ -32,6 +42,9 @@ export function SimpleSettings({
   isOpfsAvailable,
   isSpeaking,
   microphoneDevices,
+  modelDownloadSpeedBps,
+  modelInventory,
+  modelInventoryMessage,
   selectedVoiceId,
   settings,
   voiceOptions,
@@ -53,6 +66,7 @@ export function SimpleSettings({
   const transcriptionModelOption = getOption("transcriptionModel");
   const transcriptScrollOption = getOption("transcriptScrollSpeed");
   const voiceEngineOption = getOption("voiceEngine");
+  const sentencePlaybackModeOption = getOption("sentencePlaybackMode");
   const [activeTab, setActiveTab] = useState<"app" | "appearance">("app");
 
   if (!isOpen) return null;
@@ -96,9 +110,19 @@ export function SimpleSettings({
         </div>
         {activeTab === "app" ? (
           <div className="settings-body" role="tabpanel">
+        <SettingControl
+          disabled={disabled}
+          modelDownloadSpeedBps={modelDownloadSpeedBps}
+          modelInventory={modelInventory}
+          modelInventoryMessage={modelInventoryMessage}
+          option={transcriptionModelOption}
+          settings={settings}
+          onUpdate={onUpdate}
+        />
         <label className="settings-control">
           <span>Microphone</span>
           <select
+            aria-label="Microphone"
             value={settings.microphone.deviceId}
             disabled={disabled}
             onChange={(event) => onSetMicrophone(event.target.value)}
@@ -168,12 +192,6 @@ export function SimpleSettings({
         />
         <SettingControl
           disabled={disabled}
-          option={transcriptionModelOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <SettingControl
-          disabled={disabled}
           option={transcriptScrollOption}
           settings={settings}
           onUpdate={onUpdate}
@@ -184,9 +202,16 @@ export function SimpleSettings({
           settings={settings}
           onUpdate={onUpdate}
         />
+        <SettingControl
+          disabled={isSpeaking}
+          option={sentencePlaybackModeOption}
+          settings={settings}
+          onUpdate={onUpdate}
+        />
         <label className="settings-control">
           <span>Voice</span>
           <select
+            aria-label="Voice"
             value={selectedVoiceId}
             disabled={isSpeaking || voiceOptions.length === 0}
             onChange={(event) => onSetVoice(event.target.value)}
@@ -219,7 +244,8 @@ export function SimpleSettings({
                     recordingFormatOption.key,
                     transcriptionModelOption.key,
                     transcriptScrollOption.key,
-                    voiceEngineOption.key
+                    voiceEngineOption.key,
+                    sentencePlaybackModeOption.key
                   ].includes(option.key)
               )
               .map((option) => (
@@ -250,15 +276,25 @@ export function SimpleSettings({
 
 function SettingControl({
   disabled,
+  modelDownloadSpeedBps,
+  modelInventory,
+  modelInventoryMessage,
   option,
   settings,
   onUpdate
 }: {
   disabled: boolean;
+  modelDownloadSpeedBps?: number;
+  modelInventory?: ModelInventoryEntry[];
+  modelInventoryMessage?: string;
   option: SettingsOption;
   settings: RuntimeSettings;
   onUpdate: (option: SettingsOption, value: boolean | number | string) => void;
 }) {
+  const inventory = modelInventory ?? [];
+  const inventoryMessageText = modelInventoryMessage ?? "";
+  const speedBps = modelDownloadSpeedBps ?? 0;
+
   if (option.kind === "checkbox") {
     return (
       <label className="settings-control checkbox-control">
@@ -275,46 +311,51 @@ function SettingControl({
 
   if (option.kind === "select") {
     if (option.key === "transcriptionModel") {
+      const selectedModel = transcriptionModelOptions.find(
+        (item) => item.value === option.getValue(settings)
+      );
       return (
-        <fieldset className="model-picker">
-          <legend>{option.label}</legend>
-          <p className="model-picker-intro">
-            Each option includes its language coverage and why you would pick it.
-          </p>
-          <div className="model-picker-grid" role="radiogroup" aria-label={option.label}>
+        <label className="settings-control model-select-control">
+          <span>{option.label}</span>
+          <select
+            aria-label={option.label}
+            value={option.getValue(settings)}
+            disabled={disabled}
+            onChange={(event) => onUpdate(option, event.target.value)}
+          >
             {transcriptionModelOptions.map((item) => {
-              const checked = option.getValue(settings) === item.value;
+              const inventoryEntry = inventory.find((entry) => entry.modelId === item.value);
               return (
-                <label
-                  key={item.value}
-                  className="model-card"
-                  data-checked={checked}
-                  data-language-support={item.languageSupport}
-                >
-                  <input
-                    type="radio"
-                    name={option.key}
-                    value={item.value}
-                    checked={checked}
-                    disabled={disabled}
-                    onChange={(event) => onUpdate(option, event.target.value)}
-                  />
-                  <span className="model-card-topline">
-                    <strong>{item.label}</strong>
-                    <em>{item.languageSupport}</em>
-                  </span>
-                  <span className="model-card-meta">
-                    <span>{item.parameters}</span>
-                    <code>{item.repo}</code>
-                  </span>
-                  <span className="model-card-summary">{item.summary}</span>
-                  <span className="model-card-why">{item.whyChoose}</span>
-                  {item.caution ? <span className="model-card-caution">{item.caution}</span> : null}
-                </label>
+                <option key={item.value} value={item.value}>
+                  {formatModelOptionLabel(
+                    item.label,
+                    item.downloadSizeBytes ?? inventoryEntry?.sizeBytes ?? 0,
+                    inventoryEntry,
+                    speedBps
+                  )}
+                </option>
               );
             })}
-          </div>
-        </fieldset>
+          </select>
+          {selectedModel ? (
+            <span className="model-select-details">
+              <strong>{selectedModel.parameters}</strong>
+              <span>{selectedModel.runtime} - {selectedModel.timestampSupport}</span>
+              <span>
+                {formatSelectedModelStatus(
+                  selectedModel,
+                  inventory.find((entry) => entry.modelId === selectedModel.value),
+                  speedBps,
+                  inventoryMessageText
+                )}
+              </span>
+              <span>{selectedModel.summary}</span>
+              <span>{selectedModel.whyChoose}</span>
+              {selectedModel.caution ? <span>{selectedModel.caution}</span> : null}
+              <code>{selectedModel.repo}</code>
+            </span>
+          ) : null}
+        </label>
       );
     }
 
@@ -322,6 +363,7 @@ function SettingControl({
       <label className="settings-control">
         <span>{option.label}</span>
         <select
+          aria-label={option.label}
           value={option.getValue(settings)}
           disabled={disabled}
           onChange={(event) => onUpdate(option, event.target.value)}
@@ -342,6 +384,7 @@ function SettingControl({
       <label className="settings-control slider-control">
         <span>{option.label}</span>
         <input
+          aria-label={option.label}
           type="range"
           min={option.min}
           max={option.max}
@@ -360,6 +403,7 @@ function SettingControl({
     <label className="settings-control">
       <span>{option.label}</span>
       <input
+        aria-label={option.label}
         type="number"
         min={option.min}
         max={option.max}
@@ -385,4 +429,58 @@ function getOption(key: string) {
   const option = settingsOptions.find((item) => item.key === key);
   if (!option) throw new Error(`Missing setting option: ${key}`);
   return option;
+}
+
+function formatModelOptionLabel(
+  label: string,
+  sizeBytes: number,
+  inventory: ModelInventoryEntry | undefined,
+  downloadSpeedBps: number
+) {
+  const parts = [label];
+  if (sizeBytes > 0) {
+    parts.push(formatBytes(sizeBytes));
+  }
+  if (inventory?.cached) {
+    parts.push("cached");
+  } else if (inventory && inventory.cachedFiles > 0 && inventory.totalFiles > 0) {
+    parts.push(`${inventory.cachedFiles}/${inventory.totalFiles} cached`);
+  }
+
+  const remainingBytes = Math.max(0, (inventory?.sizeBytes ?? sizeBytes) - (inventory?.cachedBytes ?? 0));
+  const etaSeconds = estimateSecondsRemaining(remainingBytes, downloadSpeedBps);
+  if (!inventory?.cached && etaSeconds) {
+    parts.push(`~${formatDuration(etaSeconds)}`);
+  }
+
+  return parts.join(" · ");
+}
+
+function formatSelectedModelStatus(
+  model: NonNullable<ReturnType<typeof getTranscriptionModelOption>>,
+  inventory: ModelInventoryEntry | undefined,
+  downloadSpeedBps: number,
+  fallbackMessage: string
+) {
+  if (!inventory) {
+    return fallbackMessage || "Checking model cache and download size...";
+  }
+
+  const totalBytes = inventory.sizeBytes || model.downloadSizeBytes || 0;
+  const remainingBytes = Math.max(0, totalBytes - inventory.cachedBytes);
+  const etaSeconds = estimateSecondsRemaining(remainingBytes, downloadSpeedBps);
+  const cacheLabel = inventory.cached
+    ? "Cached locally"
+    : inventory.cachedFiles > 0
+      ? `Partially cached (${inventory.cachedFiles}/${inventory.totalFiles} files)`
+      : "Not cached yet";
+
+  const details = [cacheLabel];
+  if (totalBytes > 0) {
+    details.push(`download ${formatBytes(totalBytes)}`);
+  }
+  if (!inventory.cached && etaSeconds) {
+    details.push(`about ${formatDuration(etaSeconds)} at ${formatBytes(downloadSpeedBps)}/s`);
+  }
+  return details.join(" · ");
 }

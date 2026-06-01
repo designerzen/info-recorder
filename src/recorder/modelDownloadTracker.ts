@@ -73,6 +73,14 @@ export class ModelDownloadTracker {
     const percent = (this.loadedBytes / this.totalBytes) * 100;
     return Math.min(ACTIVE_DOWNLOAD_MAX_PROGRESS, Math.max(0, percent));
   }
+
+  getLoadedBytes() {
+    return this.loadedBytes;
+  }
+
+  getTotalBytes() {
+    return this.totalBytes;
+  }
 }
 
 export function clampProgress(value: number) {

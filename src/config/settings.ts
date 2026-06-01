@@ -6,13 +6,35 @@ export type VadMode =
 
 export type TtsProvider = "web-speech" | "supertonic-web";
 export type RecordingExportFormat = "native" | "ogg-vorbis" | "ogg-opus" | "mp3" | "flac" | "wav";
-export type TranscriptionModelId =
-  | "onnx-community/whisper-tiny.en"
-  | "onnx-community/whisper-base.en"
-  | "onnx-community/whisper-small.en"
-  | "onnx-community/whisper-tiny"
-  | "onnx-community/whisper-base"
-  | "onnx-community/whisper-small";
+export type SentencePlaybackMode = "tts" | "source-audio";
+export type OnnxTranscriptionModelId =
+  | "onnx-community/whisper-tiny.en_timestamped"
+  | "onnx-community/whisper-base.en_timestamped"
+  | "onnx-community/whisper-small.en_timestamped"
+  | "onnx-community/whisper-medium.en_timestamped"
+  | "onnx-community/whisper-tiny_timestamped"
+  | "onnx-community/whisper-base_timestamped"
+  | "onnx-community/whisper-small_timestamped"
+  | "onnx-community/whisper-medium_timestamped"
+  | "onnx-community/whisper-large-v3-turbo_timestamped";
+export type WasmWhisperModelId =
+  | "tiny.en"
+  | "tiny"
+  | "base.en"
+  | "base"
+  | "small.en"
+  | "small"
+  | "tiny.en-q5_1"
+  | "tiny-q5_1"
+  | "base.en-q5_1"
+  | "base-q5_1"
+  | "small.en-q5_1"
+  | "small-q5_1"
+  | "medium.en-q5_0"
+  | "medium-q5_0"
+  | "large-q5_0";
+export type WasmTranscriptionModelId = `wasm:${WasmWhisperModelId}`;
+export type TranscriptionModelId = OnnxTranscriptionModelId | WasmTranscriptionModelId;
 
 export type SupertonicVoiceId =
   | "M1"
@@ -87,6 +109,7 @@ export type AppSettings = {
   };
   tts: {
     provider: TtsProvider;
+    sentencePlaybackMode: SentencePlaybackMode;
     enabledByDefault: boolean;
     lang: string;
     rate: number;
@@ -121,7 +144,7 @@ export const appSettings: AppSettings = {
     autoScrollSpeed: 5
   },
   transcription: {
-    modelId: "onnx-community/whisper-small.en",
+    modelId: "onnx-community/whisper-small.en_timestamped",
     device: "webgpu",
     isMultilingual: false,
     language: "en",
@@ -171,6 +194,7 @@ export const appSettings: AppSettings = {
   },
   tts: {
     provider: "web-speech",
+    sentencePlaybackMode: "tts",
     enabledByDefault: false,
     lang: "en-US",
     rate: 1,
@@ -200,3 +224,11 @@ export const appSettings: AppSettings = {
     }
   }
 };
+
+export function isWasmTranscriptionModelId(modelId: TranscriptionModelId): modelId is WasmTranscriptionModelId {
+  return modelId.startsWith("wasm:");
+}
+
+export function getWasmWhisperModelId(modelId: WasmTranscriptionModelId): WasmWhisperModelId {
+  return modelId.slice("wasm:".length) as WasmWhisperModelId;
+}

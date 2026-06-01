@@ -1,20 +1,35 @@
 import { env, ModelRegistry, pipeline } from "@huggingface/transformers";
+import { ModelManager, WhisperWasmService, getAllModels } from "@timur00kh/whisper.wasm";
 import type {
   AllTasks,
   AutomaticSpeechRecognitionOutput,
 } from "@huggingface/transformers";
-import { appSettings, type AppSettings } from "../config/settings";
+import {
+  appSettings,
+  getWasmWhisperModelId,
+  isWasmTranscriptionModelId,
+  type AppSettings,
+  type WasmWhisperModelId
+} from "../config/settings";
+import {
+  getTranscriptionModelOption,
+  transcriptionModelOptions
+} from "../config/settingsOptions";
 import { clampProgress, ModelDownloadTracker } from "./modelDownloadTracker";
 import { resampleLinear } from "./audioUtils";
 import { withTimeout } from "./asyncTimeout";
+import type { TranscriptWord } from "../transcript/timedTranscript";
+import type { ModelInventoryEntry } from "./modelInventory";
 
 type AutomaticSpeechRecognitionPipelineType = AllTasks["automatic-speech-recognition"];
 type AudioSamples = Float32Array<ArrayBuffer>;
+type LoadedModel = AutomaticSpeechRecognitionPipelineType | WhisperWasmService;
 
 type InboundMessage =
   | { type: "configure"; transcription: AppSettings["transcription"] }
   | { type: "load" }
   | { type: "cache-status" }
+  | { type: "catalog-status" }
   | { type: "warm-cache" }
   | { type: "flush" }
   | {
@@ -23,6 +38,7 @@ type InboundMessage =
       sampleRate: number;
       isFinal: boolean;
       startsNewParagraph: boolean;
+      offsetSeconds: number;
     };
 
 const TASK = "automatic-speech-recognition";
@@ -47,12 +63,20 @@ env.customCache = null;
 env.cacheKey = CACHE_NAME;
 
 let transcriber: AutomaticSpeechRecognitionPipelineType | null = null;
-let loadingPromise: Promise<AutomaticSpeechRecognitionPipelineType> | null = null;
+let wasmTranscriber: WhisperWasmService | null = null;
+let loadingPromise: Promise<LoadedModel> | null = null;
 let queue = Promise.resolve();
 let overallProgress = 0;
 let downloadTracker: ModelDownloadTracker | null = null;
 let transcriptionSettings: AppSettings["transcription"] = { ...appSettings.transcription };
 const defaultFetch = env.fetch;
+let smoothedBytesPerSecond = 0;
+let lastTrackedLoadedBytes = 0;
+let lastTrackedProgressAt = 0;
+const manifestCache = new Map<
+  string,
+  Promise<{ files: Array<{ file: string; sizeBytes: number }>; totalBytes: number }>
+>();
 
 self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
   if (data.type === "configure") {
@@ -62,6 +86,11 @@ self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
 
   if (data.type === "cache-status") {
     void postCacheStatus();
+    return;
+  }
+
+  if (data.type === "catalog-status") {
+    void postCatalogStatus();
     return;
   }
 
@@ -91,6 +120,10 @@ self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
 };
 
 async function load() {
+  if (isWasmTranscriptionModelId(transcriptionSettings.modelId)) {
+    return loadWasmModel();
+  }
+
   if (!("gpu" in navigator)) {
     throw new Error("WebGPU is required. Enable WebGPU or use a supported Chromium browser.");
   }
@@ -99,6 +132,7 @@ async function load() {
     const status = await inspectCacheStatus();
     downloadTracker = await prepareDownloadTracker(status);
     overallProgress = status.cached ? 100 : downloadTracker?.getProgress() ?? 0;
+    resetDownloadRateTracking();
     postCacheStatusMessage(status);
     env.fetch = createWorkerFetch();
     loadingPromise = pipeline(TASK, transcriptionSettings.modelId, {
@@ -109,14 +143,61 @@ async function load() {
     });
   }
 
-  transcriber = await loadingPromise;
+  transcriber = (await loadingPromise) as AutomaticSpeechRecognitionPipelineType;
   await postCacheStatus();
   postMessage({ type: "ready" });
   return transcriber;
 }
 
+async function loadWasmModel() {
+  if (typeof WebAssembly !== "object") {
+    throw new Error("WebAssembly is required. Update your browser or enable WebAssembly.");
+  }
+
+  if (!loadingPromise) {
+    const modelId = getSelectedWasmModelId();
+    const status = await inspectWasmCacheStatus(modelId);
+    overallProgress = status.cached ? 100 : 0;
+    postCacheStatusMessage(status);
+
+    const service = new WhisperWasmService({ logLevel: 0 });
+    const manager = new ModelManager();
+    loadingPromise = manager
+      .loadModel(modelId, true, (progress) => {
+        overallProgress = clampProgress(progress);
+        postMessage({
+          type: "progress",
+          message: "Downloading Whisper WASM model...",
+          progress: overallProgress,
+          loadedBytes: Math.round((status.sizeBytes ?? 0) * (overallProgress / 100)),
+          totalBytes: status.sizeBytes,
+          bytesPerSecond: smoothedBytesPerSecond
+        });
+      })
+      .then(async (modelData) => {
+        postMessage({
+          type: "progress",
+          message: "Initializing Whisper WASM model...",
+          progress: overallProgress
+        });
+        await service.initModel(modelData);
+        return service;
+      });
+  }
+
+  wasmTranscriber = (await loadingPromise) as WhisperWasmService;
+  await postCacheStatus();
+  postMessage({ type: "ready" });
+  return wasmTranscriber;
+}
+
 async function transcribe(message: Extract<InboundMessage, { type: "transcribe" }>) {
-  const recognizer = transcriber ?? (await load());
+  if (isWasmTranscriptionModelId(transcriptionSettings.modelId)) {
+    await transcribeWithWasm(message);
+    return;
+  }
+
+  const recognizer = (transcriber ?? (await load())) as AutomaticSpeechRecognitionPipelineType;
   const audio =
     message.sampleRate === 16000 ? message.audio : resampleLinear(message.audio, message.sampleRate, 16000);
   const durationSeconds = audio.length / 16000;
@@ -124,7 +205,8 @@ async function transcribe(message: Extract<InboundMessage, { type: "transcribe" 
   const result = await withTimeout(
     recognizer(audio, {
       ...getGenerationOptions(),
-      ...getChunkingOptions(durationSeconds)
+      ...getChunkingOptions(durationSeconds),
+      return_timestamps: "word"
     }),
     TRANSCRIPTION_TIMEOUT_MS,
     `Whisper did not finish a ${durationSeconds.toFixed(1)}s audio chunk within ${Math.round(
@@ -133,8 +215,53 @@ async function transcribe(message: Extract<InboundMessage, { type: "transcribe" 
   );
 
   const output = result as AutomaticSpeechRecognitionOutput | AutomaticSpeechRecognitionOutput[];
-  const text = Array.isArray(output) ? output.map((item) => item.text).join(" ") : output.text;
-  postMessage({ type: "segment", text, startsNewParagraph: message.startsNewParagraph });
+  const segments = Array.isArray(output) ? output : [output];
+  const text = segments.map((item) => item.text).join(" ").trim();
+  const words = segments.flatMap((item) => toTranscriptWords(item, message.offsetSeconds));
+  postMessage({ type: "segment", text, startsNewParagraph: message.startsNewParagraph, words });
+}
+
+async function transcribeWithWasm(message: Extract<InboundMessage, { type: "transcribe" }>) {
+  const recognizer = (wasmTranscriber ?? (await load())) as WhisperWasmService;
+  const audio =
+    message.sampleRate === 16000 ? message.audio : resampleLinear(message.audio, message.sampleRate, 16000);
+  const durationSeconds = audio.length / 16000;
+  const segments = await withTimeout(
+    collectWasmSegments(recognizer, audio, message.offsetSeconds),
+    TRANSCRIPTION_TIMEOUT_MS,
+    `Whisper WASM did not finish a ${durationSeconds.toFixed(1)}s audio chunk within ${Math.round(
+      TRANSCRIPTION_TIMEOUT_MS / 1000
+    )} seconds. Try a smaller or quantized WASM model.`
+  );
+  const text = segments.map((segment) => segment.text).join(" ").trim();
+  const words = segments.map((segment) => ({
+    text: segment.text,
+    startMs: segment.startMs,
+    endMs: segment.endMs
+  }));
+  postMessage({ type: "segment", text, startsNewParagraph: message.startsNewParagraph, words });
+}
+
+async function collectWasmSegments(
+  recognizer: WhisperWasmService,
+  audio: Float32Array,
+  offsetSeconds: number
+): Promise<TranscriptWord[]> {
+  const session = recognizer.createSession();
+  const segments: TranscriptWord[] = [];
+  for await (const segment of session.streaming(audio, {
+    language: getSelectedWasmModelId().includes(".en") ? "en" : "auto",
+    threads: Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4)),
+    translate: false
+  })) {
+    const startMs = Math.max(0, Math.round(offsetSeconds * 1000 + segment.timeStart));
+    const endMs = Math.max(startMs, Math.round(offsetSeconds * 1000 + segment.timeEnd));
+    const text = segment.text.trim();
+    if (text) {
+      segments.push({ text, startMs, endMs });
+    }
+  }
+  return segments;
 }
 
 function describeProgress(event: unknown) {
@@ -148,14 +275,20 @@ function describeProgress(event: unknown) {
   if (status === "download" || status === "progress" || status === "progress_total") {
     return {
       message: "Downloading Whisper package...",
-      progress: overallProgress
+      progress: overallProgress,
+      loadedBytes: downloadTracker?.getLoadedBytes(),
+      totalBytes: downloadTracker?.getTotalBytes(),
+      bytesPerSecond: smoothedBytesPerSecond
     };
   }
 
   if (status === "done") {
     return {
       message: "Finalizing Whisper model...",
-      progress: overallProgress
+      progress: overallProgress,
+      loadedBytes: downloadTracker?.getLoadedBytes(),
+      totalBytes: downloadTracker?.getTotalBytes(),
+      bytesPerSecond: smoothedBytesPerSecond
     };
   }
 
@@ -197,12 +330,16 @@ function reportError(cause: unknown) {
 
 async function postCacheStatus() {
   try {
-    const status = await inspectCacheStatus();
+    const status = isWasmTranscriptionModelId(transcriptionSettings.modelId)
+      ? await inspectWasmCacheStatus(getSelectedWasmModelId())
+      : await inspectCacheStatus();
     if (status.cached) {
       overallProgress = 100;
-    } else {
+    } else if (!isWasmTranscriptionModelId(transcriptionSettings.modelId)) {
       downloadTracker = await prepareDownloadTracker(status);
       overallProgress = downloadTracker?.getProgress() ?? 0;
+    } else {
+      overallProgress = 0;
     }
     postCacheStatusMessage(status);
   } catch (cause) {
@@ -225,59 +362,107 @@ function formatWorkerError(cause: unknown, fallback: string) {
   return message;
 }
 
+async function postCatalogStatus() {
+  try {
+    const entries = await Promise.all(
+      transcriptionModelOptions.map((option) => inspectModelInventory(option.value))
+    );
+    postMessage({
+      type: "catalog-status",
+      entries
+    });
+  } catch (cause) {
+    postMessage({
+      type: "catalog-status",
+      entries: [] satisfies ModelInventoryEntry[],
+      message: formatWorkerError(cause, "Unable to inspect model catalog.")
+    });
+  }
+}
+
+function toTranscriptWords(output: AutomaticSpeechRecognitionOutput, offsetSeconds: number): TranscriptWord[] {
+  return (output.chunks ?? [])
+    .map((chunk) => {
+      const [startSeconds, endSeconds] = chunk.timestamp;
+      if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds)) return null;
+      return {
+        text: chunk.text,
+        startMs: Math.max(0, Math.round((offsetSeconds + startSeconds) * 1000)),
+        endMs: Math.max(0, Math.round((offsetSeconds + endSeconds) * 1000))
+      } satisfies TranscriptWord;
+    })
+    .filter((word): word is TranscriptWord => word !== null);
+}
+
 async function inspectCacheStatus() {
-  const status = await ModelRegistry.is_pipeline_cached_files(
-    TASK,
-    transcriptionSettings.modelId,
-    getPipelineOptions()
-  );
+  const status = await inspectOnnxModelInventory(transcriptionSettings.modelId);
   return {
-    cached: status.allCached,
-    cachedFiles: status.files.filter((file) => file.cached).length,
-    totalFiles: status.files.length,
-    files: status.files
+    cached: status.cached,
+    cachedFiles: status.cachedFiles,
+    totalFiles: status.totalFiles,
+    files: status.files,
+    sizeBytes: status.sizeBytes,
+    cachedBytes: status.cachedBytes
   };
+}
+
+async function inspectWasmCacheStatus(modelId: WasmWhisperModelId) {
+  try {
+    const manager = new ModelManager();
+    const models = await manager.getAvailableModels();
+    const model = models.find((item) => item.id === modelId);
+    const staticModel = getTranscriptionModelOption(`wasm:${modelId}`);
+    const sizeBytes = staticModel?.downloadSizeBytes ?? 0;
+    return {
+      cached: Boolean(model?.cached),
+      cachedFiles: model?.cached ? 1 : 0,
+      totalFiles: 1,
+      files: [],
+      sizeBytes,
+      cachedBytes: model?.cached ? sizeBytes : 0
+    };
+  } catch {
+    const staticModel = getTranscriptionModelOption(`wasm:${modelId}`);
+    const sizeBytes = staticModel?.downloadSizeBytes ?? 0;
+    return {
+      cached: false,
+      cachedFiles: 0,
+      totalFiles: 1,
+      files: [],
+      sizeBytes,
+      cachedBytes: 0
+    };
+  }
 }
 
 function postCacheStatusMessage(status: {
   cached: boolean;
   cachedFiles: number;
   totalFiles: number;
+  sizeBytes?: number;
+  cachedBytes?: number;
 }) {
   postMessage({
     type: "cache-status",
     cached: status.cached,
     cachedFiles: status.cachedFiles,
-    totalFiles: status.totalFiles
+    totalFiles: status.totalFiles,
+    sizeBytes: status.sizeBytes,
+    cachedBytes: status.cachedBytes
   });
 }
 
 async function prepareDownloadTracker(status?: Awaited<ReturnType<typeof inspectCacheStatus>>) {
   const cacheStatus = status ?? (await inspectCacheStatus());
-  const pipelineOptions = getPipelineOptions();
-  const files = await ModelRegistry.get_pipeline_files(
-    TASK,
-    transcriptionSettings.modelId,
-    pipelineOptions
-  );
-  const metadata = await Promise.all(
-    files.map(async (file) => ({
-      file,
-      metadata: await ModelRegistry.get_file_metadata(
-        transcriptionSettings.modelId,
-        file,
-        pipelineOptions as never
-      )
-    }))
-  );
+  const manifest = await getOnnxModelManifest(transcriptionSettings.modelId);
   const cachedFiles = new Set(
     cacheStatus.files.filter((file) => file.cached).map((file) => file.file)
   );
 
   return new ModelDownloadTracker(
-    metadata.map(({ file, metadata: fileMetadata }) => ({
+    manifest.files.map(({ file, sizeBytes }) => ({
       url: buildRemoteUrl(transcriptionSettings.modelId, file),
-      size: fileMetadata.size ?? 0,
+      size: sizeBytes,
       cached: cachedFiles.has(file)
     }))
   );
@@ -328,9 +513,22 @@ function applyTranscriptionSettings(nextSettings: AppSettings["transcription"]) 
 
   transcriptionSettings = { ...nextSettings };
   transcriber = null;
+  wasmTranscriber = null;
   loadingPromise = null;
   downloadTracker = null;
   overallProgress = 0;
+  resetDownloadRateTracking();
+}
+
+function getSelectedWasmModelId() {
+  if (!isWasmTranscriptionModelId(transcriptionSettings.modelId)) {
+    throw new Error("The selected model is not a Whisper WASM model.");
+  }
+  const modelId = getWasmWhisperModelId(transcriptionSettings.modelId);
+  if (!getAllModels().some((model) => model.id === modelId)) {
+    throw new Error(`Unknown Whisper WASM model: ${modelId}`);
+  }
+  return modelId;
 }
 
 function areTranscriptionSettingsEqual(
@@ -368,10 +566,14 @@ function fetchWithXhr(request: Request) {
       );
       if (typeof nextProgress === "number") {
         overallProgress = clampProgress(nextProgress);
+        updateDownloadRateTracking();
         postMessage({
           type: "progress",
           message: "Downloading Whisper package...",
-          progress: overallProgress
+          progress: overallProgress,
+          loadedBytes: downloadTracker?.getLoadedBytes(),
+          totalBytes: downloadTracker?.getTotalBytes(),
+          bytesPerSecond: smoothedBytesPerSecond
         });
       }
     };
@@ -391,6 +593,7 @@ function fetchWithXhr(request: Request) {
       const nextProgress = downloadTracker?.markDone(request.url);
       if (typeof nextProgress === "number") {
         overallProgress = clampProgress(nextProgress);
+        updateDownloadRateTracking();
       }
 
       resolve(
@@ -414,6 +617,112 @@ function fetchWithXhr(request: Request) {
 
     xhr.send();
   });
+}
+
+async function inspectModelInventory(modelId: AppSettings["transcription"]["modelId"]): Promise<ModelInventoryEntry> {
+  if (isWasmTranscriptionModelId(modelId)) {
+    const status = await inspectWasmCacheStatus(getWasmWhisperModelId(modelId));
+    return {
+      modelId,
+      cached: status.cached,
+      cachedFiles: status.cachedFiles,
+      totalFiles: status.totalFiles,
+      sizeBytes: status.sizeBytes,
+      cachedBytes: status.cachedBytes
+    };
+  }
+
+  const status = await inspectOnnxModelInventory(modelId);
+  return {
+    modelId,
+    cached: status.cached,
+    cachedFiles: status.cachedFiles,
+    totalFiles: status.totalFiles,
+    sizeBytes: status.sizeBytes,
+    cachedBytes: status.cachedBytes
+  };
+}
+
+async function inspectOnnxModelInventory(modelId: string) {
+  const pipelineOptions = {
+    ...PIPELINE_OPTIONS,
+    device: transcriptionSettings.device
+  } as const;
+  const [status, manifest] = await Promise.all([
+    ModelRegistry.is_pipeline_cached_files(TASK, modelId, pipelineOptions),
+    getOnnxModelManifest(modelId)
+  ]);
+  const sizeByFile = new Map(manifest.files.map((file) => [file.file, file.sizeBytes]));
+  const cachedBytes = status.files.reduce(
+    (total, file) => total + (file.cached ? sizeByFile.get(file.file) ?? 0 : 0),
+    0
+  );
+  return {
+    cached: status.allCached,
+    cachedFiles: status.files.filter((file) => file.cached).length,
+    totalFiles: status.files.length,
+    files: status.files,
+    sizeBytes: manifest.totalBytes,
+    cachedBytes
+  };
+}
+
+function getOnnxModelManifest(modelId: string) {
+  const cacheKey = `${modelId}:${transcriptionSettings.device}`;
+  const existing = manifestCache.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const pipelineOptions = {
+      ...PIPELINE_OPTIONS,
+      device: transcriptionSettings.device
+    } as const;
+    const files = await ModelRegistry.get_pipeline_files(TASK, modelId, pipelineOptions);
+    const fileMetadata = await Promise.all(
+      files.map(async (file) => {
+        const metadata = await ModelRegistry.get_file_metadata(modelId, file, pipelineOptions as never);
+        return {
+          file,
+          sizeBytes: metadata.size ?? 0
+        };
+      })
+    );
+    return {
+      files: fileMetadata,
+      totalBytes: fileMetadata.reduce((total, file) => total + file.sizeBytes, 0)
+    };
+  })();
+
+  manifestCache.set(cacheKey, promise);
+  return promise;
+}
+
+function resetDownloadRateTracking() {
+  smoothedBytesPerSecond = 0;
+  lastTrackedLoadedBytes = 0;
+  lastTrackedProgressAt = 0;
+}
+
+function updateDownloadRateTracking() {
+  if (!downloadTracker) return;
+
+  const now = performance.now();
+  const loadedBytes = downloadTracker.getLoadedBytes();
+
+  if (lastTrackedProgressAt > 0 && now > lastTrackedProgressAt && loadedBytes >= lastTrackedLoadedBytes) {
+    const elapsedSeconds = (now - lastTrackedProgressAt) / 1000;
+    const deltaBytes = loadedBytes - lastTrackedLoadedBytes;
+    if (elapsedSeconds > 0 && deltaBytes > 0) {
+      const instantBytesPerSecond = deltaBytes / elapsedSeconds;
+      smoothedBytesPerSecond =
+        smoothedBytesPerSecond > 0
+          ? smoothedBytesPerSecond * 0.7 + instantBytesPerSecond * 0.3
+          : instantBytesPerSecond;
+    }
+  }
+
+  lastTrackedLoadedBytes = loadedBytes;
+  lastTrackedProgressAt = now;
 }
 
 function buildRemoteUrl(modelId: string, file: string) {

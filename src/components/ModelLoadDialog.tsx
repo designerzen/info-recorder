@@ -1,15 +1,28 @@
 import { Download } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { estimateSecondsRemaining, formatBytes, formatDuration } from "../recorder/modelInventory";
 
 type ModelLoadDialogProps = {
   isOpen: boolean;
   message: string;
   progress: number;
+  transferredBytes?: number;
+  totalBytes?: number;
+  downloadSpeedBps?: number;
 };
 
-export function ModelLoadDialog({ isOpen, message, progress }: ModelLoadDialogProps) {
+export function ModelLoadDialog({
+  isOpen,
+  message,
+  progress,
+  transferredBytes = 0,
+  totalBytes = 0,
+  downloadSpeedBps = 0
+}: ModelLoadDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const progressValue = Math.min(100, Math.max(0, Math.round(progress)));
+  const remainingBytes = Math.max(0, totalBytes - transferredBytes);
+  const etaSeconds = estimateSecondsRemaining(remainingBytes, downloadSpeedBps);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -48,6 +61,15 @@ export function ModelLoadDialog({ isOpen, message, progress }: ModelLoadDialogPr
       <div className="model-dialog-status" aria-live="polite">
         <span>{message || "Preparing model download..."}</span>
         <strong>{progressValue}%</strong>
+      </div>
+      <div className="model-dialog-status model-dialog-metrics" aria-live="polite">
+        <span>
+          {totalBytes > 0 ? `${formatBytes(transferredBytes)} of ${formatBytes(totalBytes)}` : "Measuring model size..."}
+        </span>
+        <span>
+          {downloadSpeedBps > 0 ? `${formatBytes(downloadSpeedBps)}/s` : "Estimating speed..."}
+          {etaSeconds ? ` · ${formatDuration(etaSeconds)} left` : ""}
+        </span>
       </div>
     </dialog>
   );

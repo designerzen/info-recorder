@@ -2,9 +2,12 @@ import {
   appSettings,
   type AppSettings,
   type RecordingExportFormat,
+  type SentencePlaybackMode,
   type TranscriptionModelId,
   type TtsProvider,
-  type VadMode
+  type VadMode,
+  type WasmTranscriptionModelId,
+  type WasmWhisperModelId
 } from "./settings";
 import {
   clonePageStyle,
@@ -43,7 +46,10 @@ export type TranscriptionModelOption = {
   label: string;
   repo: string;
   parameters: string;
+  downloadSizeBytes?: number;
   languageSupport: "English only" | "Multilingual";
+  runtime: "WebGPU ONNX" | "WASM GGML";
+  timestampSupport: "Word timestamps" | "Segment timestamps";
   summary: string;
   whyChoose: string;
   caution?: string;
@@ -130,6 +136,11 @@ export const ttsProviderOptions: SelectOption<TtsProvider>[] = [
   { value: "supertonic-web", label: "Supertonic WebGPU" }
 ];
 
+export const sentencePlaybackModeOptions: SelectOption<SentencePlaybackMode>[] = [
+  { value: "tts", label: "Use TTS" },
+  { value: "source-audio", label: "Use original audio" }
+];
+
 export const recordingExportFormatOptions: SelectOption<RecordingExportFormat>[] = [
   { value: "native", label: "Native browser recording" },
   { value: "ogg-vorbis", label: "Ogg Vorbis" },
@@ -141,60 +152,158 @@ export const recordingExportFormatOptions: SelectOption<RecordingExportFormat>[]
 
 export const transcriptionModelOptions: TranscriptionModelOption[] = [
   {
-    value: "onnx-community/whisper-tiny.en",
-    label: "Whisper Tiny",
-    repo: "onnx-community/whisper-tiny.en",
+    value: "onnx-community/whisper-tiny.en_timestamped",
+    label: "Whisper Tiny Timestamped",
+    repo: "onnx-community/whisper-tiny.en_timestamped",
     parameters: "39M params",
     languageSupport: "English only",
-    summary: "Smallest English Whisper checkpoint in the app.",
-    whyChoose: "Choose this when first-run download size matters most and you want the quickest lightweight English model."
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Smallest English-only Whisper export that keeps word timestamps available.",
+    whyChoose: "Choose this when first-run download size and startup speed matter most, and you still need timestamped English transcription.",
+    caution: "Lowest accuracy of the English-only choices, so short words, names, and noisy microphone audio are more likely to be wrong."
   },
   {
-    value: "onnx-community/whisper-base.en",
-    label: "Whisper Base",
-    repo: "onnx-community/whisper-base.en",
+    value: "onnx-community/whisper-base.en_timestamped",
+    label: "Whisper Base Timestamped",
+    repo: "onnx-community/whisper-base.en_timestamped",
     parameters: "74M params",
     languageSupport: "English only",
-    summary: "A modest step up from Tiny without a huge jump in size.",
-    whyChoose: "Choose this when Tiny feels too weak but you still want a relatively small English-only download."
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Light English-only timestamped model with a useful quality step up from Tiny.",
+    whyChoose: "Choose this when Tiny is too weak but you still want a relatively small browser download with word timing support.",
+    caution: "Still a compact model, so accuracy can trail Small and Medium on difficult microphone recordings."
   },
   {
-    value: "onnx-community/whisper-small.en",
-    label: "Whisper Small",
-    repo: "onnx-community/whisper-small.en",
+    value: "onnx-community/whisper-small.en_timestamped",
+    label: "Whisper Small Timestamped",
+    repo: "onnx-community/whisper-small.en_timestamped",
     parameters: "244M params",
     languageSupport: "English only",
-    summary: "The strongest classic English-only Whisper size before Medium.",
-    whyChoose: "Choose this when you want stronger English accuracy than Base and can accept a noticeably larger download."
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Default English-only timestamped model with a strong accuracy and size balance.",
+    whyChoose: "Choose this for normal English transcription when you want better quality than Base without the much heavier Medium download."
   },
   {
-    value: "onnx-community/whisper-tiny",
-    label: "Whisper Tiny",
-    repo: "onnx-community/whisper-tiny",
+    value: "onnx-community/whisper-medium.en_timestamped",
+    label: "Whisper Medium Timestamped",
+    repo: "onnx-community/whisper-medium.en_timestamped",
+    parameters: "769M params",
+    languageSupport: "English only",
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Largest English-only timestamped checkpoint exposed by the app.",
+    whyChoose: "Choose this when English accuracy matters more than startup time and your machine can handle a very heavy browser model.",
+    caution: "Expect a very large first download and much higher memory use than Small."
+  },
+  {
+    value: "onnx-community/whisper-tiny_timestamped",
+    label: "Whisper Tiny Timestamped",
+    repo: "onnx-community/whisper-tiny_timestamped",
     parameters: "39M params",
     languageSupport: "Multilingual",
-    summary: "Smallest multilingual Whisper checkpoint.",
-    whyChoose: "Choose this when you need multiple spoken languages but still want the lightest possible model."
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Smallest multilingual Whisper export that keeps word timestamps available.",
+    whyChoose: "Choose this when you need language auto-detection or non-English speech in the lightest timestamped model.",
+    caution: "Accuracy is the weakest multilingual option, especially for noisy audio or uncommon words."
   },
   {
-    value: "onnx-community/whisper-base",
-    label: "Whisper Base",
-    repo: "onnx-community/whisper-base",
+    value: "onnx-community/whisper-base_timestamped",
+    label: "Whisper Base Timestamped",
+    repo: "onnx-community/whisper-base_timestamped",
     parameters: "74M params",
     languageSupport: "Multilingual",
-    summary: "Balanced multilingual option with a moderate model size.",
-    whyChoose: "Choose this when you need multilingual transcription and want a safer quality floor than Tiny without jumping to a very large model."
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Compact multilingual timestamped model with a safer quality floor than Tiny.",
+    whyChoose: "Choose this when you need multiple spoken languages but want to avoid the larger Small and Medium downloads."
   },
   {
-    value: "onnx-community/whisper-small",
-    label: "Whisper Small",
-    repo: "onnx-community/whisper-small",
+    value: "onnx-community/whisper-small_timestamped",
+    label: "Whisper Small Timestamped",
+    repo: "onnx-community/whisper-small_timestamped",
     parameters: "244M params",
     languageSupport: "Multilingual",
-    summary: "A stronger multilingual Whisper checkpoint that is still smaller than Medium.",
-    whyChoose: "Choose this when you want better multilingual accuracy than Base and can afford a bigger first-run download."
-  }
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Stronger multilingual timestamped model that is still much smaller than Medium.",
+    whyChoose: "Choose this when multilingual accuracy matters and you can afford a noticeably bigger first-run download than Base."
+  },
+  {
+    value: "onnx-community/whisper-medium_timestamped",
+    label: "Whisper Medium Timestamped",
+    repo: "onnx-community/whisper-medium_timestamped",
+    parameters: "769M params",
+    languageSupport: "Multilingual",
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Large multilingual timestamped checkpoint for the best classic Whisper quality in this picker.",
+    whyChoose: "Choose this when multilingual accuracy is the priority and your browser/GPU memory can handle a heavy model.",
+    caution: "This is a large download with high memory pressure; Small is safer on lower-end machines."
+  },
+  {
+    value: "onnx-community/whisper-large-v3-turbo_timestamped",
+    label: "Whisper Large v3 Turbo Timestamped",
+    repo: "onnx-community/whisper-large-v3-turbo_timestamped",
+    parameters: "809M params",
+    languageSupport: "Multilingual",
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Word timestamps",
+    summary: "Turbo large-v3 timestamped export for high-quality multilingual transcription with fewer decoder layers than full Large.",
+    whyChoose: "Choose this when you want the strongest modern multilingual option in the picker and can tolerate the largest download.",
+    caution: "Heaviest selectable option; if model loading fails on your device, use Small or Medium timestamped instead."
+  },
+  ...createWasmModelOptions()
 ];
+
+function createWasmModelOptions(): TranscriptionModelOption[] {
+  const models: Array<{
+    id: WasmWhisperModelId;
+    name: string;
+    sizeMb: number;
+    languageSupport: TranscriptionModelOption["languageSupport"];
+    quantized: boolean;
+  }> = [
+    { id: "tiny.en", name: "Tiny English", sizeMb: 75, languageSupport: "English only", quantized: false },
+    { id: "tiny", name: "Tiny Multilingual", sizeMb: 75, languageSupport: "Multilingual", quantized: false },
+    { id: "base.en", name: "Base English", sizeMb: 142, languageSupport: "English only", quantized: false },
+    { id: "base", name: "Base Multilingual", sizeMb: 142, languageSupport: "Multilingual", quantized: false },
+    { id: "small.en", name: "Small English", sizeMb: 466, languageSupport: "English only", quantized: false },
+    { id: "small", name: "Small Multilingual", sizeMb: 466, languageSupport: "Multilingual", quantized: false },
+    { id: "tiny.en-q5_1", name: "Tiny English Q5_1", sizeMb: 31, languageSupport: "English only", quantized: true },
+    { id: "tiny-q5_1", name: "Tiny Multilingual Q5_1", sizeMb: 31, languageSupport: "Multilingual", quantized: true },
+    { id: "base.en-q5_1", name: "Base English Q5_1", sizeMb: 57, languageSupport: "English only", quantized: true },
+    { id: "base-q5_1", name: "Base Multilingual Q5_1", sizeMb: 57, languageSupport: "Multilingual", quantized: true },
+    { id: "small.en-q5_1", name: "Small English Q5_1", sizeMb: 182, languageSupport: "English only", quantized: true },
+    { id: "small-q5_1", name: "Small Multilingual Q5_1", sizeMb: 182, languageSupport: "Multilingual", quantized: true },
+    { id: "medium.en-q5_0", name: "Medium English Q5_0", sizeMb: 515, languageSupport: "English only", quantized: true },
+    { id: "medium-q5_0", name: "Medium Multilingual Q5_0", sizeMb: 515, languageSupport: "Multilingual", quantized: true },
+    { id: "large-q5_0", name: "Large Multilingual Q5_0", sizeMb: 1030, languageSupport: "Multilingual", quantized: true }
+  ];
+
+  return models.map((model) => ({
+    value: `wasm:${model.id}` as WasmTranscriptionModelId,
+    label: `Whisper WASM ${model.name}`,
+    repo: `ggerganov/whisper.cpp ggml-${model.id}.bin`,
+    parameters: `~${model.sizeMb} MB${model.quantized ? " quantized GGML" : " GGML"}`,
+    downloadSizeBytes: model.sizeMb * 1024 * 1024,
+    languageSupport: model.languageSupport,
+    runtime: "WASM GGML",
+    timestampSupport: "Segment timestamps",
+    summary: `${model.name} running through whisper.cpp WASM with timestamped segments.`,
+    whyChoose: model.quantized
+      ? "Choose this when you want a much smaller download and broad browser compatibility, accepting lower accuracy than the full-size model."
+      : "Choose this when you want the whisper.cpp WASM runtime and timestamped segment output instead of the WebGPU ONNX word-timestamp path.",
+    caution: "WASM models provide segment start/end timestamps, not the ONNX word-level chunks used for per-word highlighting."
+  }));
+}
+
+export function getTranscriptionModelOption(modelId: TranscriptionModelId) {
+  return transcriptionModelOptions.find((option) => option.value === modelId) ?? null;
+}
 
 export const settingsOptions: SettingsOption[] = [
   {
@@ -411,9 +520,9 @@ export const settingsOptions: SettingsOption[] = [
     section: "recording",
     label: "Whisper model",
     kind: "select",
-    options: transcriptionModelOptions.map(({ value, label, languageSupport }) => ({
+    options: transcriptionModelOptions.map(({ value, label, languageSupport, runtime, timestampSupport }) => ({
       value,
-      label: `${label} (${languageSupport})`
+      label: `${label} (${languageSupport}, ${runtime}, ${timestampSupport})`
     })),
     getValue: (settings) => settings.transcription.modelId,
     setValue: (settings, value) => ({
@@ -492,6 +601,18 @@ export const settingsOptions: SettingsOption[] = [
     setValue: (settings, value) => ({
       ...settings,
       tts: { ...settings.tts, provider: value as TtsProvider }
+    })
+  },
+  {
+    key: "sentencePlaybackMode",
+    section: "speech",
+    label: "Sentence buttons",
+    kind: "select",
+    options: sentencePlaybackModeOptions,
+    getValue: (settings) => settings.tts.sentencePlaybackMode,
+    setValue: (settings, value) => ({
+      ...settings,
+      tts: { ...settings.tts, sentencePlaybackMode: value as SentencePlaybackMode }
     })
   },
   {

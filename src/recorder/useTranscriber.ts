@@ -15,20 +15,34 @@ import { concatAudio, getRms, toMono } from "./audioUtils";
 import { exportRecordingBlob, getRecordingExportExtension } from "./audioExport";
 import { detectVoiceActivity, type AdaptiveVadState, type VoiceActivity } from "./vad";
 import { withTimeout } from "./asyncTimeout";
+import type { TranscriptParagraph, TranscriptWord } from "../transcript/timedTranscript";
+import { getTranscriptionRuntimeSupport } from "./runtimeSupport";
+import { isWasmTranscriptionModelId } from "../config/settings";
+import type { ModelInventoryEntry } from "./modelInventory";
 
 type WorkerMessage =
   | { type: "ready" }
   | { type: "idle" }
-  | { type: "progress"; message: string; progress: number }
+  | {
+      type: "progress";
+      message: string;
+      progress: number;
+      loadedBytes?: number;
+      totalBytes?: number;
+      bytesPerSecond?: number;
+    }
   | { type: "partial"; text: string }
-  | { type: "segment"; text: string; startsNewParagraph: boolean }
+  | { type: "segment"; text: string; startsNewParagraph: boolean; words: TranscriptWord[] }
   | {
       type: "cache-status";
       cached: boolean;
       cachedFiles: number;
       totalFiles: number;
+      sizeBytes?: number;
+      cachedBytes?: number;
       message?: string;
     }
+  | { type: "catalog-status"; entries: ModelInventoryEntry[]; message?: string }
   | { type: "error"; message: string };
 
 const createFloat32Buffer = (length: number) =>
@@ -37,6 +51,13 @@ const WHISPER_CONTEXT_MS = 30_000;
 const LIVE_ANALYSIS_CHUNK_MS = 500;
 const UPLOADED_MEDIA_MIN_CHUNK_MS = 10_000;
 const UPLOADED_MEDIA_TARGET_CHUNK_MS = 24_000;
+const MODEL_SPEED_STORAGE_KEY = "info-recorder-model-download-bps";
+
+type SourceMedia = {
+  url: string;
+  kind: "audio" | "video";
+  fileName: string;
+};
 
 export function useTranscriber(settings: RuntimeSettings) {
   const worker = useMemo(
@@ -69,6 +90,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   const mediaSourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const mediaProcessorNodeRef = useRef<AudioWorkletNode | null>(null);
   const mediaSilentGainRef = useRef<GainNode | null>(null);
+  const sourceMediaUrlRef = useRef("");
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackNodeRef = useRef<AudioWorkletNode | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
@@ -88,6 +110,8 @@ export function useTranscriber(settings: RuntimeSettings) {
   const nextSegmentStartsParagraphRef = useRef(false);
   const adaptiveVadStateRef = useRef<AdaptiveVadState>({ noiseFloor: null });
   const hasTranscriptRef = useRef(false);
+  const transcriptParagraphSequenceRef = useRef(0);
+  const liveTranscribedSecondsRef = useRef(0);
   const lastActivityUpdateRef = useRef(0);
   const isWorkerReadyRef = useRef(false);
   const workerReadyPromiseRef = useRef<Promise<void> | null>(null);
@@ -117,16 +141,29 @@ export function useTranscriber(settings: RuntimeSettings) {
   const [progress, setProgress] = useState("");
   const [mediaTranscriptionProgress, setMediaTranscriptionProgress] = useState(0);
   const [sourceActivityRms, setSourceActivityRms] = useState(0);
+  const [sourceMedia, setSourceMedia] = useState<SourceMedia | null>(null);
   const [modelCacheStatus, setModelCacheStatus] = useState(
     "Whisper downloads once, then reuses browser cache storage."
   );
+  const [modelInventory, setModelInventory] = useState<ModelInventoryEntry[]>([]);
+  const [modelInventoryMessage, setModelInventoryMessage] = useState("");
+  const [modelDownloadSpeedBps, setModelDownloadSpeedBps] = useState(readPersistedModelDownloadSpeed);
+  const [modelLoadTransferredBytes, setModelLoadTransferredBytes] = useState(0);
+  const [modelLoadTotalBytes, setModelLoadTotalBytes] = useState(0);
   const [paragraphs, setParagraphs] = useState<string[]>([]);
+  const [transcriptParagraphs, setTranscriptParagraphs] = useState<TranscriptParagraph[]>([]);
 
-  const isTranscriptionSupported = "gpu" in navigator;
+  const runtimeSupport = getTranscriptionRuntimeSupport();
+  const requiresWebGpu = !isWasmTranscriptionModelId(settings.transcription.modelId);
+  const isTranscriptionSupported =
+    runtimeSupport.hasWebAssembly &&
+    runtimeSupport.isSecureContext &&
+    (!requiresWebGpu || runtimeSupport.hasWebGpu);
   const isOpfsRecordingAvailable = canUseOpfsRecording();
   const isOpfsPlaybackAvailable = canUseOpfsPlayback();
   const opfsChunkMs = settings.audio.opfsChunkMs;
   const shouldRecordToOpfs = settings.recording.shouldRecordToOpfs;
+  const persistedDownloadSpeedBpsRef = useRef(readPersistedModelDownloadSpeed());
 
   const resizeWaveform = useCallback(() => {
     const canvas = waveformCanvasRef.current;
@@ -252,6 +289,14 @@ export function useTranscriber(settings: RuntimeSettings) {
     }
   }, []);
 
+  const clearSourceMedia = useCallback(() => {
+    if (sourceMediaUrlRef.current) {
+      URL.revokeObjectURL(sourceMediaUrlRef.current);
+      sourceMediaUrlRef.current = "";
+    }
+    setSourceMedia(null);
+  }, []);
+
   const cleanupMicrophoneCapture = useCallback(() => {
     microphoneProcessorNodeRef.current?.port.close();
     microphoneProcessorNodeRef.current?.disconnect();
@@ -320,8 +365,11 @@ export function useTranscriber(settings: RuntimeSettings) {
     setModelLoadProgress(0);
     setModelLoadMessage("");
     setModelCacheStatus("Checking Whisper model cache...");
+    setModelLoadTransferredBytes(0);
+    setModelLoadTotalBytes(0);
     worker.postMessage({ type: "configure", transcription: settings.transcription });
     worker.postMessage({ type: "cache-status" });
+    worker.postMessage({ type: "catalog-status" });
   }, [settings.transcription, worker]);
 
   const ensureWorkerReady = useCallback(() => {
@@ -389,6 +437,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     liveSpeechChunksRef.current = [];
     liveSpeechBufferedSamplesRef.current = 0;
     liveSpeechStartsParagraphRef.current = false;
+    liveTranscribedSecondsRef.current = 0;
     setIsPreparing(false);
     setIsRecording(false);
     setIsTranscribingMedia(false);
@@ -423,13 +472,20 @@ export function useTranscriber(settings: RuntimeSettings) {
 
       if (data.type === "progress") {
         const nextProgress = data.progress <= 1 ? data.progress * 100 : data.progress;
-        if (isModelCachedRef.current) {
-          setIsModelLoading(false);
-        } else {
-          setIsModelLoading(true);
-        }
+        setIsModelLoading(true);
         setModelLoadProgress(Math.min(100, Math.max(0, nextProgress)));
         setModelLoadMessage(data.message);
+        if (typeof data.loadedBytes === "number") {
+          setModelLoadTransferredBytes(Math.max(0, data.loadedBytes));
+        }
+        if (typeof data.totalBytes === "number") {
+          setModelLoadTotalBytes(Math.max(0, data.totalBytes));
+        }
+        if (typeof data.bytesPerSecond === "number" && data.bytesPerSecond > 0) {
+          setModelDownloadSpeedBps(data.bytesPerSecond);
+          persistedDownloadSpeedBpsRef.current = data.bytesPerSecond;
+          persistModelDownloadSpeed(data.bytesPerSecond);
+        }
         if (!isModelCachedRef.current) {
           setProgress(data.message);
         }
@@ -441,22 +497,15 @@ export function useTranscriber(settings: RuntimeSettings) {
 
       if (data.type === "segment") {
         setPartialText("");
-        setParagraphs((current) => {
-          const normalized = data.text.trim();
-          if (!normalized) return current;
+        const normalized = data.text.trim();
+        if (!normalized) return;
 
-          hasTranscriptRef.current = true;
-
-          if (data.startsNewParagraph || current.length === 0) {
-            if (current.at(-1) === normalized) return current;
-            return [...current, normalized];
-          }
-
-          const next = [...current];
-          const previous = next.at(-1) ?? "";
-          const merged = mergeTranscriptText(previous, normalized);
-          if (merged === previous) return current;
-          next[next.length - 1] = merged;
+        hasTranscriptRef.current = true;
+        setTranscriptParagraphs((current) => {
+          const next = mergeTranscriptParagraphs(current, normalized, data.words, data.startsNewParagraph, {
+            nextParagraphId: () => `p-${transcriptParagraphSequenceRef.current++}`
+          });
+          setParagraphs(next.map((paragraph) => paragraph.text));
           return next;
         });
       }
@@ -471,14 +520,23 @@ export function useTranscriber(settings: RuntimeSettings) {
           setModelLoadProgress(100);
           setModelLoadMessage("Whisper model is already cached.");
           setModelCacheStatus("Whisper model cached locally.");
+          setModelLoadTransferredBytes(data.sizeBytes ?? data.cachedBytes ?? 0);
+          setModelLoadTotalBytes(data.sizeBytes ?? data.cachedBytes ?? 0);
         } else if (data.totalFiles > 0) {
           setIsModelCached(false);
           setModelCacheStatus(
             `Whisper model will download once. Cached ${data.cachedFiles}/${data.totalFiles} files.`
           );
+          setModelLoadTransferredBytes(data.cachedBytes ?? 0);
+          setModelLoadTotalBytes(data.sizeBytes ?? 0);
         } else {
           setModelCacheStatus(data.message ?? "Whisper model cache status unavailable.");
         }
+      }
+
+      if (data.type === "catalog-status") {
+        setModelInventory(data.entries);
+        setModelInventoryMessage(data.message ?? "");
       }
 
       if (data.type === "error") {
@@ -508,9 +566,10 @@ export function useTranscriber(settings: RuntimeSettings) {
       stopAnalyser();
       cleanupMicrophoneCapture();
       cleanupMediaSource();
+      clearSourceMedia();
       disposeWaveformWorker();
     };
-  }, [cleanupMediaSource, cleanupMicrophoneCapture, disposeWaveformWorker, stopAnalyser, stopPlayback]);
+  }, [cleanupMediaSource, cleanupMicrophoneCapture, clearSourceMedia, disposeWaveformWorker, stopAnalyser, stopPlayback]);
 
   const startOpfsRecording = useCallback(
     async (mimeType: string) => {
@@ -627,8 +686,10 @@ export function useTranscriber(settings: RuntimeSettings) {
             liveSpeechBufferedSamplesRef
           );
           const audio = concatAudio(tailRef.current, speechAudio);
+          const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
           const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
           tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+          liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
 
           worker.postMessage(
             {
@@ -636,7 +697,8 @@ export function useTranscriber(settings: RuntimeSettings) {
               audio,
               sampleRate,
               isFinal: false,
-              startsNewParagraph: liveSpeechStartsParagraphRef.current
+              startsNewParagraph: liveSpeechStartsParagraphRef.current,
+              offsetSeconds
             },
             [audio.buffer]
           );
@@ -673,8 +735,10 @@ export function useTranscriber(settings: RuntimeSettings) {
             liveSpeechBufferedSamplesRef
           );
           const audio = concatAudio(tailRef.current, speechAudio);
+          const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
           const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
           tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+          liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
 
           worker.postMessage(
             {
@@ -682,7 +746,8 @@ export function useTranscriber(settings: RuntimeSettings) {
               audio,
               sampleRate,
               isFinal: false,
-              startsNewParagraph: liveSpeechStartsParagraphRef.current
+              startsNewParagraph: liveSpeechStartsParagraphRef.current,
+              offsetSeconds
             },
             [audio.buffer]
           );
@@ -708,8 +773,10 @@ export function useTranscriber(settings: RuntimeSettings) {
             liveSpeechBufferedSamplesRef
           );
           const audio = concatAudio(tailRef.current, speechAudio);
+          const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
           const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
           tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+          liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
 
           worker.postMessage(
             {
@@ -717,7 +784,8 @@ export function useTranscriber(settings: RuntimeSettings) {
               audio,
               sampleRate,
               isFinal: false,
-              startsNewParagraph: liveSpeechStartsParagraphRef.current
+              startsNewParagraph: liveSpeechStartsParagraphRef.current,
+              offsetSeconds
             },
             [audio.buffer]
           );
@@ -745,10 +813,12 @@ export function useTranscriber(settings: RuntimeSettings) {
       mono: Float32Array,
       sampleRate: number,
       startsNewParagraph: boolean,
+      chunkOffsetSeconds: number,
       overlapMs = 0
     ) => {
       if (mono.length === 0) return;
 
+      const tailSeconds = tailRef.current.length / sampleRate;
       const audio = concatAudio(tailRef.current, mono);
       const overlapSamples = Math.floor(sampleRate * (overlapMs / 1000));
       tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
@@ -759,7 +829,8 @@ export function useTranscriber(settings: RuntimeSettings) {
           audio,
           sampleRate,
           isFinal: false,
-          startsNewParagraph
+          startsNewParagraph,
+          offsetSeconds: Math.max(0, chunkOffsetSeconds - tailSeconds)
         },
         [audio.buffer]
       );
@@ -797,15 +868,18 @@ export function useTranscriber(settings: RuntimeSettings) {
           liveSpeechBufferedSamplesRef
         );
         const audio = concatAudio(tailRef.current, speechAudio);
+        const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
         const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
         tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
+        liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
         worker.postMessage(
           {
             type: "transcribe",
             audio,
             sampleRate,
             isFinal: true,
-            startsNewParagraph: liveSpeechStartsParagraphRef.current
+            startsNewParagraph: liveSpeechStartsParagraphRef.current,
+            offsetSeconds
           },
           [audio.buffer]
         );
@@ -884,11 +958,12 @@ export function useTranscriber(settings: RuntimeSettings) {
 
   const start = useCallback(async () => {
     setError("");
+    clearSourceMedia();
     setIsPreparing(true);
 
     if (!isTranscriptionSupported) {
       setIsPreparing(false);
-      setError("This prototype requires a browser with WebGPU enabled.");
+      setError("This app needs WebGPU, WebAssembly, and a secure browser context before it can transcribe audio.");
       return;
     }
 
@@ -953,6 +1028,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       );
     }
   }, [
+    clearSourceMedia,
     isTranscriptionSupported,
     isOpfsRecordingAvailable,
     opfsChunkMs,
@@ -1001,7 +1077,7 @@ export function useTranscriber(settings: RuntimeSettings) {
         );
         if (end === null) break;
         const chunk = mono.slice(offset, end);
-        await processUploadedPcmChunk(chunk, decoded.sampleRate, startsNewParagraph);
+        await processUploadedPcmChunk(chunk, decoded.sampleRate, startsNewParagraph, offset / decoded.sampleRate);
         startsNewParagraph = true;
         offset = end;
         const percent = Math.round((end / mono.length) * 100);
@@ -1069,7 +1145,12 @@ export function useTranscriber(settings: RuntimeSettings) {
 
             const chunk = buffered.slice(0, splitEnd);
             buffered = buffered.slice(splitEnd);
-            await processUploadedPcmChunk(chunk, audioContext.sampleRate, startsNewParagraph);
+            await processUploadedPcmChunk(
+              chunk,
+              audioContext.sampleRate,
+              startsNewParagraph,
+              Math.max(0, media.currentTime - (chunk.length / audioContext.sampleRate))
+            );
             startsNewParagraph = true;
           }
         }).catch((cause) => {
@@ -1092,7 +1173,12 @@ export function useTranscriber(settings: RuntimeSettings) {
             if (buffered.length > 0) {
               const finalChunk = buffered;
               buffered = new Float32Array();
-              await processUploadedPcmChunk(finalChunk, audioContext.sampleRate, startsNewParagraph);
+              await processUploadedPcmChunk(
+                finalChunk,
+                audioContext.sampleRate,
+                startsNewParagraph,
+                Math.max(0, media.duration - (finalChunk.length / audioContext.sampleRate))
+              );
             }
           });
           void processQueue
@@ -1114,7 +1200,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   const transcribeMediaFile = useCallback(
     async (file: File) => {
       if (!isTranscriptionSupported) {
-        setError("This prototype requires a browser with WebGPU enabled.");
+        setError("This app needs WebGPU, WebAssembly, and a secure browser context before it can transcribe audio.");
         return;
       }
 
@@ -1125,6 +1211,14 @@ export function useTranscriber(settings: RuntimeSettings) {
       setIsPreparing(true);
       setIsRecording(true);
       setIsTranscribingMedia(true);
+      clearSourceMedia();
+      const nextSourceUrl = URL.createObjectURL(file);
+      sourceMediaUrlRef.current = nextSourceUrl;
+      setSourceMedia({
+        url: nextSourceUrl,
+        kind: file.type.startsWith("video/") ? "video" : "audio",
+        fileName: file.name
+      });
       if (!isModelCached) {
         setModelLoadProgress(0);
         setModelLoadMessage(
@@ -1158,6 +1252,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       }
     },
     [
+      clearSourceMedia,
       cleanupMediaSource,
       ensureWorkerReady,
       isTranscriptionSupported,
@@ -1283,11 +1378,14 @@ export function useTranscriber(settings: RuntimeSettings) {
 
   const clear = useCallback(() => {
     setParagraphs([]);
+    setTranscriptParagraphs([]);
     setPartialText("");
     setError("");
     hasTranscriptRef.current = false;
     nextSegmentStartsParagraphRef.current = false;
-  }, []);
+    transcriptParagraphSequenceRef.current = 0;
+    clearSourceMedia();
+  }, [clearSourceMedia]);
 
   return {
     error,
@@ -1299,21 +1397,30 @@ export function useTranscriber(settings: RuntimeSettings) {
     isRecording,
     isTranscribingMedia,
     isTranscriptionSupported,
+    requiresWebGpu,
+    runtimeSupport,
     mediaFileName,
     opfsChunkCount,
     opfsChunkMs,
     opfsError,
     opfsSessionName,
     modelCacheStatus,
+    modelInventory,
+    modelInventoryMessage,
+    modelDownloadSpeedBps: getEstimatedDownloadSpeedBps(modelDownloadSpeedBps, persistedDownloadSpeedBpsRef.current),
     modelLoadMessage,
     modelLoadProgress,
+    modelLoadTransferredBytes,
+    modelLoadTotalBytes,
     isModelCached,
     audioParts,
     partialText,
     progress,
     mediaTranscriptionProgress,
     sourceActivityRms,
+    sourceMedia,
     paragraphs,
+    transcriptParagraphs,
     vadMode: settings.vad.mode,
     setWaveformCanvas,
     shouldRecordToOpfs,
@@ -1327,6 +1434,39 @@ export function useTranscriber(settings: RuntimeSettings) {
     transcribeMediaFile,
     clear
   };
+}
+
+function readPersistedModelDownloadSpeed() {
+  try {
+    const raw = window.localStorage.getItem(MODEL_SPEED_STORAGE_KEY);
+    if (!raw) return getNavigatorDownloadSpeedEstimate();
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : getNavigatorDownloadSpeedEstimate();
+  } catch {
+    return getNavigatorDownloadSpeedEstimate();
+  }
+}
+
+function persistModelDownloadSpeed(value: number) {
+  try {
+    window.localStorage.setItem(MODEL_SPEED_STORAGE_KEY, String(Math.round(value)));
+  } catch {
+    // Ignore storage failures and keep the in-memory estimate.
+  }
+}
+
+function getNavigatorDownloadSpeedEstimate() {
+  const connection = (navigator as Navigator & {
+    connection?: { downlink?: number };
+  }).connection;
+  if (!connection?.downlink || connection.downlink <= 0) return 0;
+  return (connection.downlink * 1_000_000) / 8;
+}
+
+function getEstimatedDownloadSpeedBps(liveBytesPerSecond: number, persistedBytesPerSecond: number) {
+  if (liveBytesPerSecond > 0) return liveBytesPerSecond;
+  if (persistedBytesPerSecond > 0) return persistedBytesPerSecond;
+  return getNavigatorDownloadSpeedEstimate();
 }
 
 function getSupportedMimeType() {
@@ -1444,6 +1584,71 @@ function mergeTranscriptText(previous: string, incoming: string) {
   }
 
   return `${left} ${right}`.trim();
+}
+
+function mergeTranscriptParagraphs(
+  current: TranscriptParagraph[],
+  incomingText: string,
+  incomingWords: TranscriptWord[],
+  startsNewParagraph: boolean,
+  options: { nextParagraphId: () => string }
+) {
+  if (startsNewParagraph || current.length === 0) {
+    if (current.at(-1)?.text === incomingText) return current;
+    return [
+      ...current,
+      {
+        id: options.nextParagraphId(),
+        text: incomingText,
+        words: incomingWords
+      }
+    ];
+  }
+
+  const next = [...current];
+  const previous = next[next.length - 1];
+  if (!previous) {
+    return [
+      {
+        id: options.nextParagraphId(),
+        text: incomingText,
+        words: incomingWords
+      }
+    ];
+  }
+
+  const mergedText = mergeTranscriptText(previous.text, incomingText);
+  const mergedWords = mergeTranscriptWords(previous.words, incomingWords);
+  if (mergedText === previous.text && mergedWords.length === previous.words.length) {
+    return current;
+  }
+
+  next[next.length - 1] = {
+    ...previous,
+    text: mergedText,
+    words: mergedWords
+  };
+  return next;
+}
+
+function mergeTranscriptWords(previous: TranscriptWord[], incoming: TranscriptWord[]) {
+  if (previous.length === 0) return incoming;
+  if (incoming.length === 0) return previous;
+
+  const maxOverlap = Math.min(previous.length, incoming.length, 24);
+  for (let size = maxOverlap; size >= 1; size -= 1) {
+    const leftTail = previous.slice(-size).map((word) => normalizeTranscriptToken(word.text));
+    const rightHead = incoming.slice(0, size).map((word) => normalizeTranscriptToken(word.text));
+    if (leftTail.every((token, index) => token === rightHead[index])) {
+      return [...previous, ...incoming.slice(size)];
+    }
+  }
+
+  return [...previous, ...incoming];
+}
+
+function normalizeTranscriptToken(text: string) {
+  return text.trim().toLowerCase();
 }
 
 function getMicrophoneConstraints(settings: RuntimeSettings): MediaTrackConstraints {
