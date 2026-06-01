@@ -25,23 +25,24 @@ describe("settingsOptions regressions", () => {
     const settings = readSettingsFromUrl(
       `?transcriptScrollSpeed=99&activityDetection=1&vad=fixed-rms&recordingFormat=mp3&transcriptionModel=onnx-community%2Fwhisper-base.en&voice=VoiceA&mic=mic-1&pageStyle=${encodeURIComponent(
         JSON.stringify({ ...defaultPageStyle, textColor: "#abcdef" })
-      )}&voiceEngine=not-real`
+      )}&voiceEngine=not-real&sentencePlaybackMode=source-audio`
     );
 
     expect(settings.transcript.autoScrollSpeed).toBe(10);
     expect(settings.vad.enabled).toBe(true);
     expect(settings.vad.mode).toBe("fixed-rms");
     expect(settings.audio.recordingExportFormat).toBe("mp3");
-    expect(settings.transcription.modelId).toBe("onnx-community/whisper-base.en");
+    expect(settings.transcription.modelId).toBe(defaultRuntimeSettings.transcription.modelId);
     expect(settings.tts.selectedVoiceId).toBe("VoiceA");
     expect(settings.microphone.deviceId).toBe("mic-1");
     expect(settings.pageStyle.textColor).toBe("#abcdef");
     expect(settings.tts.provider).toBe(defaultRuntimeSettings.tts.provider);
+    expect(settings.tts.sentencePlaybackMode).toBe("source-audio");
   });
 
   it("writes current settings back into the URL", () => {
     const settings = cloneRuntimeSettings(defaultRuntimeSettings);
-    settings.transcription.modelId = "onnx-community/whisper-tiny.en";
+    settings.transcription.modelId = "onnx-community/whisper-tiny.en_timestamped";
     settings.tts.selectedVoiceId = "VoiceB";
     settings.microphone.deviceId = "mic-2";
     settings.pageStyle.textColor = "#654321";
@@ -51,14 +52,14 @@ describe("settingsOptions regressions", () => {
 
     expect(replaceStateSpy).toHaveBeenCalledTimes(1);
     const nextUrl = replaceStateSpy.mock.calls[0]?.[2];
-    expect(String(nextUrl)).toContain("transcriptionModel=onnx-community%2Fwhisper-tiny.en");
+    expect(String(nextUrl)).toContain("transcriptionModel=onnx-community%2Fwhisper-tiny.en_timestamped");
     expect(String(nextUrl)).toContain("voice=VoiceB");
     expect(String(nextUrl)).toContain("mic=mic-2");
     expect(String(nextUrl)).toContain("pageStyle=");
   });
 
-  it("defaults to whisper small english and exposes the browser-safe model list", () => {
-    expect(defaultRuntimeSettings.transcription.modelId).toBe("onnx-community/whisper-small.en");
+  it("defaults to timestamped whisper small english and exposes timestamp-capable ONNX and WASM models", () => {
+    expect(defaultRuntimeSettings.transcription.modelId).toBe("onnx-community/whisper-small.en_timestamped");
     expect(defaultRuntimeSettings.vad.enabled).toBe(false);
 
     const modelOption = settingsOptions.find((option) => option.key === "transcriptionModel");
@@ -68,13 +69,34 @@ describe("settingsOptions regressions", () => {
     }
 
     expect(modelOption.options.map((item) => item.value)).toEqual([
-      "onnx-community/whisper-tiny.en",
-      "onnx-community/whisper-base.en",
-      "onnx-community/whisper-small.en",
-      "onnx-community/whisper-tiny",
-      "onnx-community/whisper-base",
-      "onnx-community/whisper-small"
+      "onnx-community/whisper-tiny.en_timestamped",
+      "onnx-community/whisper-base.en_timestamped",
+      "onnx-community/whisper-small.en_timestamped",
+      "onnx-community/whisper-medium.en_timestamped",
+      "onnx-community/whisper-tiny_timestamped",
+      "onnx-community/whisper-base_timestamped",
+      "onnx-community/whisper-small_timestamped",
+      "onnx-community/whisper-medium_timestamped",
+      "onnx-community/whisper-large-v3-turbo_timestamped",
+      "wasm:tiny.en",
+      "wasm:tiny",
+      "wasm:base.en",
+      "wasm:base",
+      "wasm:small.en",
+      "wasm:small",
+      "wasm:tiny.en-q5_1",
+      "wasm:tiny-q5_1",
+      "wasm:base.en-q5_1",
+      "wasm:base-q5_1",
+      "wasm:small.en-q5_1",
+      "wasm:small-q5_1",
+      "wasm:medium.en-q5_0",
+      "wasm:medium-q5_0",
+      "wasm:large-q5_0"
     ]);
+    const wasmModel = modelOption.options.find((item) => item.value === "wasm:base.en-q5_1");
+    expect(wasmModel?.label).toContain("WASM GGML");
+    expect(wasmModel?.label).toContain("Segment timestamps");
   });
 
   it("selects the realtime silence threshold based on VAD mode and fallback", () => {

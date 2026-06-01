@@ -68,20 +68,21 @@ describe("SimpleSettings regressions", () => {
     expect(onUpdate).toHaveBeenCalledWith(vadOption, "fixed-rms");
   });
 
-  it("shows the Whisper model cards and forwards changes", async () => {
+  it("shows the Whisper model selector and forwards changes", async () => {
     const user = userEvent.setup();
     const settings = cloneRuntimeSettings(defaultRuntimeSettings);
     const onUpdate = vi.fn();
     renderSettings({ settings, onUpdate });
 
-    expect(screen.getByText("Each option includes its language coverage and why you would pick it.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Whisper model")).toBeInTheDocument();
+    expect(screen.getByText("Default English-only timestamped model with a strong accuracy and size balance.")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("radio", { name: /Whisper Base.*English only/i }));
+    await user.selectOptions(screen.getByLabelText("Whisper model"), "onnx-community/whisper-base.en_timestamped");
 
     const modelOption = settingsOptions.find(
       (option) => option.key === "transcriptionModel"
     ) as SettingsOption;
-    expect(onUpdate).toHaveBeenCalledWith(modelOption, "onnx-community/whisper-base.en");
+    expect(onUpdate).toHaveBeenCalledWith(modelOption, "onnx-community/whisper-base.en_timestamped");
   });
 
   it("disables OPFS recording controls when storage is unavailable", () => {
@@ -97,6 +98,7 @@ describe("SimpleSettings regressions", () => {
     renderSettings({ isSpeaking: true });
 
     expect(screen.getByLabelText("Voice engine")).toBeDisabled();
+    expect(screen.getByLabelText("Sentence buttons")).toBeDisabled();
     expect(screen.getByLabelText("Voice")).toBeDisabled();
   });
 
