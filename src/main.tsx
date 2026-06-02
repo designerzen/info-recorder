@@ -364,13 +364,14 @@ function App() {
 
       <section ref={transcriptRef} className="transcript" aria-label={aria.transcript}>
         <div className="transcript-body">
-          {isBusyTranscribingMedia ? (
-            <div className="transcript-busy-state" role="status" aria-live="polite">
-              <div className="transcript-busy-spinner" aria-hidden="true" />
-              <p>Transcription is running in the background.</p>
-            </div>
-          ) : transcriptBlocks.length > 0 ? (
+          {transcriptBlocks.length > 0 ? (
             <>
+              {isBusyTranscribingMedia ? (
+                <div className="transcript-busy-state" role="status" aria-live="polite">
+                  <div className="transcript-busy-spinner" aria-hidden="true" />
+                  <p>Transcription is running in the background. New text appears here as each chunk finishes.</p>
+                </div>
+              ) : null}
               {transcriptBlocks.map((paragraph, index) => (
                 <div
                   key={`${index}-${paragraph.slice(0, 16)}`}
@@ -425,6 +426,11 @@ function App() {
               ))}
               <div ref={transcriptEndRef} className="transcript-end-anchor" aria-hidden="true" />
             </>
+          ) : isBusyTranscribingMedia ? (
+            <div className="transcript-busy-state" role="status" aria-live="polite">
+              <div className="transcript-busy-spinner" aria-hidden="true" />
+              <p>Transcription is running in the background.</p>
+            </div>
           ) : (
             <p className="empty">
               Press record for live speech, or upload media to transcribe an existing audio or video file.

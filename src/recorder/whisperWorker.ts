@@ -20,6 +20,7 @@ import { resampleLinear } from "./audioUtils";
 import { withTimeout } from "./asyncTimeout";
 import type { TranscriptWord } from "../transcript/timedTranscript";
 import type { ModelInventoryEntry } from "./modelInventory";
+import { createTransformersOpfsCache } from "./transformersOpfsCache";
 
 type AutomaticSpeechRecognitionPipelineType = AllTasks["automatic-speech-recognition"];
 type AudioSamples = Float32Array<ArrayBuffer>;
@@ -58,8 +59,8 @@ env.allowLocalModels = false;
 env.allowRemoteModels = true;
 env.useBrowserCache = "caches" in globalThis;
 env.useWasmCache = true;
-env.useCustomCache = false;
-env.customCache = null;
+env.useCustomCache = "storage" in navigator && "getDirectory" in navigator.storage;
+env.customCache = env.useCustomCache ? createTransformersOpfsCache() : null;
 env.cacheKey = CACHE_NAME;
 
 let transcriber: AutomaticSpeechRecognitionPipelineType | null = null;
@@ -369,7 +370,8 @@ async function postCatalogStatus() {
     );
     postMessage({
       type: "catalog-status",
-      entries
+      entries,
+      message: formatCatalogStatusMessage(entries)
     });
   } catch (cause) {
     postMessage({
@@ -378,6 +380,18 @@ async function postCatalogStatus() {
       message: formatWorkerError(cause, "Unable to inspect model catalog.")
     });
   }
+}
+
+function formatCatalogStatusMessage(entries: ModelInventoryEntry[]) {
+  const availableOffline = entries.filter((entry) => entry.cached).length;
+  const storageLabel = env.useCustomCache ? "persistent offline storage" : "browser cache storage";
+  if (availableOffline === 0) {
+    return `No models are available offline yet. Downloads will be saved to ${storageLabel}.`;
+  }
+  if (availableOffline === 1) {
+    return `1 model is available offline in ${storageLabel}.`;
+  }
+  return `${availableOffline} models are available offline in ${storageLabel}.`;
 }
 
 function toTranscriptWords(output: AutomaticSpeechRecognitionOutput, offsetSeconds: number): TranscriptWord[] {

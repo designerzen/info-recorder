@@ -294,6 +294,7 @@ function SettingControl({
   const inventory = modelInventory ?? [];
   const inventoryMessageText = modelInventoryMessage ?? "";
   const speedBps = modelDownloadSpeedBps ?? 0;
+  const availableOfflineCount = inventory.filter((entry) => entry.cached).length;
 
   if (option.kind === "checkbox") {
     return (
@@ -341,6 +342,11 @@ function SettingControl({
             <span className="model-select-details">
               <strong>{selectedModel.parameters}</strong>
               <span>{selectedModel.runtime} - {selectedModel.timestampSupport}</span>
+              <span>
+                {availableOfflineCount > 0
+                  ? `${availableOfflineCount}/${transcriptionModelOptions.length} models available offline`
+                  : "No transcription models are cached offline yet"}
+              </span>
               <span>
                 {formatSelectedModelStatus(
                   selectedModel,
@@ -442,9 +448,9 @@ function formatModelOptionLabel(
     parts.push(formatBytes(sizeBytes));
   }
   if (inventory?.cached) {
-    parts.push("cached");
+    parts.push("available offline");
   } else if (inventory && inventory.cachedFiles > 0 && inventory.totalFiles > 0) {
-    parts.push(`${inventory.cachedFiles}/${inventory.totalFiles} cached`);
+    parts.push(`${inventory.cachedFiles}/${inventory.totalFiles} offline`);
   }
 
   const remainingBytes = Math.max(0, (inventory?.sizeBytes ?? sizeBytes) - (inventory?.cachedBytes ?? 0));
@@ -470,10 +476,10 @@ function formatSelectedModelStatus(
   const remainingBytes = Math.max(0, totalBytes - inventory.cachedBytes);
   const etaSeconds = estimateSecondsRemaining(remainingBytes, downloadSpeedBps);
   const cacheLabel = inventory.cached
-    ? "Cached locally"
+    ? "Available offline"
     : inventory.cachedFiles > 0
-      ? `Partially cached (${inventory.cachedFiles}/${inventory.totalFiles} files)`
-      : "Not cached yet";
+      ? `Partially available offline (${inventory.cachedFiles}/${inventory.totalFiles} files)`
+      : "Not cached for offline use yet";
 
   const details = [cacheLabel];
   if (totalBytes > 0) {

@@ -2,7 +2,7 @@
 
 Info Recorder is a browser-only speech recorder and transcription prototype. It records microphone audio into the browser's Origin Private File System (OPFS), draws a live waveform, uses local voice activity detection to split speech into phrase parts, and transcribes speech on screen with Transformers.js and WebGPU.
 
-No microphone audio is sent to an application server. Transcription runs client-side. On first use, the browser downloads the Whisper model files and stores them in browser cache storage. Later runs reuse the cached files unless the user clears site data/cache storage, changes browser profile, changes device, or changes the model/revision.
+No microphone audio is sent to an application server. Transcription runs client-side. On first use, the browser downloads the Whisper model files and stores them in persistent origin storage through Transformers.js. Later runs reuse the cached files without downloading them again unless the user clears site data, changes browser profile, changes device, or changes the model/revision.
 
 ## Features
 
@@ -16,7 +16,7 @@ No microphone audio is sent to an application server. Transcription runs client-
 - Interchangeable voice activity detection modes for paragraph and part boundaries
 - Client-side Whisper transcription through `@huggingface/transformers`
 - WebGPU-only model execution
-- First-run Whisper model download with browser Cache API reuse on later runs
+- First-run Whisper model download with persistent offline reuse on later runs
 - OPFS playback through an AudioWorklet after decoding stored chunks to PCM
 
 ## Requirements
@@ -91,8 +91,9 @@ recordings/
 - Settings expose timestamp-capable Whisper ONNX exports and Whisper WASM GGML models. ONNX models provide word timestamps through `return_timestamps: "word"` chunks; WASM GGML models provide segment start/end timestamps from `@timur00kh/whisper.wasm`.
 - Current ONNX choices are English-only `tiny/base/small/medium` timestamped, multilingual `tiny/base/small/medium` timestamped, and multilingual `large-v3-turbo` timestamped.
 - Current WASM choices are `tiny/base/small` English and multilingual, Q5 `tiny/base/small` English and multilingual, Q5 `medium` English and multilingual, and Q5 `large` multilingual.
-- `env.useBrowserCache = true` and `env.useWasmCache = true` are enabled in the transcription worker.
+- Transformers.js uses a custom persistent cache in origin storage, with browser cache fallback when persistent storage APIs are unavailable.
 - The worker checks `ModelRegistry.is_pipeline_cached_files(...)` for the exact WebGPU ASR pipeline and reports whether the model is cached.
+- The model selector shows which models are already available offline before you disconnect from the network.
 - Live microphone transcription defaults to raw timed audio chunks. Activity detection can be enabled in settings when you want silence-aware chunking.
 - When enabled, VAD runs through `src/vad.ts` and is selected through `appSettings.vad.mode`.
 - Phrase parts are created when activity detection sees low activity or a long trailing silence.

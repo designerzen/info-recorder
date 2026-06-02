@@ -47,6 +47,13 @@ type WorkerMessage =
 
 const createFloat32Buffer = (length: number) =>
   new Float32Array(new ArrayBuffer(length * Float32Array.BYTES_PER_ELEMENT));
+
+function yieldToBrowser() {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 0);
+  });
+}
+
 const WHISPER_CONTEXT_MS = 30_000;
 const LIVE_ANALYSIS_CHUNK_MS = 500;
 const UPLOADED_MEDIA_MIN_CHUNK_MS = 10_000;
@@ -143,7 +150,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   const [sourceActivityRms, setSourceActivityRms] = useState(0);
   const [sourceMedia, setSourceMedia] = useState<SourceMedia | null>(null);
   const [modelCacheStatus, setModelCacheStatus] = useState(
-    "Whisper downloads once, then reuses browser cache storage."
+    "Whisper downloads once, then stays available offline on this device."
   );
   const [modelInventory, setModelInventory] = useState<ModelInventoryEntry[]>([]);
   const [modelInventoryMessage, setModelInventoryMessage] = useState("");
@@ -364,7 +371,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     setIsModelLoading(false);
     setModelLoadProgress(0);
     setModelLoadMessage("");
-    setModelCacheStatus("Checking Whisper model cache...");
+    setModelCacheStatus("Checking offline Whisper model cache...");
     setModelLoadTransferredBytes(0);
     setModelLoadTotalBytes(0);
     worker.postMessage({ type: "configure", transcription: settings.transcription });
@@ -460,7 +467,8 @@ export function useTranscriber(settings: RuntimeSettings) {
         setModelLoadMessage("Whisper model is ready.");
         setProgress("");
         setIsModelCached(true);
-        setModelCacheStatus("Whisper model cached locally.");
+        setModelCacheStatus("Whisper model available offline.");
+        worker.postMessage({ type: "catalog-status" });
       }
 
       if (data.type === "idle") {
@@ -518,20 +526,21 @@ export function useTranscriber(settings: RuntimeSettings) {
           setIsModelCached(true);
           setIsModelLoading(false);
           setModelLoadProgress(100);
-          setModelLoadMessage("Whisper model is already cached.");
-          setModelCacheStatus("Whisper model cached locally.");
+          setModelLoadMessage("Whisper model is already available offline.");
+          setModelCacheStatus("Whisper model available offline.");
           setModelLoadTransferredBytes(data.sizeBytes ?? data.cachedBytes ?? 0);
           setModelLoadTotalBytes(data.sizeBytes ?? data.cachedBytes ?? 0);
         } else if (data.totalFiles > 0) {
           setIsModelCached(false);
           setModelCacheStatus(
-            `Whisper model will download once. Cached ${data.cachedFiles}/${data.totalFiles} files.`
+            `Whisper model will download once. ${data.cachedFiles}/${data.totalFiles} files are already available offline.`
           );
           setModelLoadTransferredBytes(data.cachedBytes ?? 0);
           setModelLoadTotalBytes(data.sizeBytes ?? 0);
         } else {
           setModelCacheStatus(data.message ?? "Whisper model cache status unavailable.");
         }
+        worker.postMessage({ type: "catalog-status" });
       }
 
       if (data.type === "catalog-status") {
@@ -1047,9 +1056,11 @@ export function useTranscriber(settings: RuntimeSettings) {
   const cacheModel = useCallback(() => {
     setError("");
     setModelLoadProgress(0);
-    setModelLoadMessage(isModelCached ? "Whisper model is already cached." : "Preparing Whisper model cache...");
+    setModelLoadMessage(
+      isModelCached ? "Whisper model is already available offline." : "Preparing offline Whisper model cache..."
+    );
     setModelCacheStatus(
-      isModelCached ? "Whisper model cached locally." : "Preparing Whisper model cache..."
+      isModelCached ? "Whisper model available offline." : "Preparing offline Whisper model cache..."
     );
     if (isModelCached) {
       setIsModelLoading(false);
@@ -1083,6 +1094,7 @@ export function useTranscriber(settings: RuntimeSettings) {
         const percent = Math.round((end / mono.length) * 100);
         setMediaTranscriptionProgress(percent);
         setProgress(`Transcribing ${file.name} ${percent}%`);
+        await yieldToBrowser();
       }
 
       setMediaTranscriptionProgress(100);
