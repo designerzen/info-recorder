@@ -67,6 +67,7 @@ The default VAD mode is `adaptive-rms`. It has the best performance and lowest f
 - `adaptive-rms`: default, fast noise-floor adaptive energy detector
 - `fixed-rms`: simple fixed threshold detector for controlled environments
 - `rms-zcr`: combines RMS with zero-crossing rate to reject some low-frequency rumble and high-frequency noise
+- `silero-vad`: optional Silero model detector, lazy-loaded only when selected and cached in local model storage
 - `transformers-audio-classification`: optional ML-backed detector using a configurable Transformers.js audio-classification model, loaded only when selected
 
 ## Storage Layout
@@ -82,7 +83,7 @@ recordings/
     ...
 ```
 
-`session.json` contains session metadata, chunk metadata, and phrase part metadata. Each chunk also has a matching JSON metadata file with start time, end time, duration, MIME type, and byte length.
+`session.json` contains session metadata, chunk metadata, and phrase part metadata. Phrase part metadata includes `LAT` and `LONG` values from the browser's native geolocation service when available, or `null` when unavailable or not permitted. Each chunk also has a matching JSON metadata file with start time, end time, duration, MIME type, and byte length.
 
 ## Implementation Notes
 
