@@ -6,6 +6,7 @@ import "./styles.css";
 import { ActivityMeter } from "./components/ActivityMeter";
 import { ModelLoadDialog } from "./components/ModelLoadDialog";
 import { PageStyleSheet } from "./components/PageStyleSheet";
+import { PhraseLocationMap, type PhraseLocationMapMessage } from "./components/PhraseLocationMap";
 import { SimpleSettings } from "./components/SimpleSettings";
 import type { PageStyleSettings } from "./config/pageStyle";
 import {
@@ -17,6 +18,7 @@ import {
   type RuntimeTtsSettings,
   type SettingsOption
 } from "./config/settingsOptions";
+import { getTypefaceAssFamily } from "./config/typefaces";
 import { useTranscriber } from "./recorder/useTranscriber";
 import { useSubtitleSpeech } from "./speech/useSubtitleSpeech";
 import { useJassubSubtitles } from "./subtitles/useJassubSubtitles";
@@ -69,14 +71,16 @@ function App() {
   const setPageStyle = useCallback((pageStyle: PageStyleSettings) => {
     setSettings((current) => ({
       ...current,
-      pageStyle
+      pageStyle,
+      subtitles: {
+        ...current.subtitles,
+        fontFamily: getTypefaceAssFamily(pageStyle.fontFamily)
+      }
     }));
   }, []);
   const recorder = useTranscriber(settings);
   const transcriptText = recorder.partialText || recorder.paragraphs.at(-1) || "";
-  const speech = useSubtitleSpeech(transcriptText, settings.tts, updateTtsSettings);
   const aria = getAriaCopy(settings.pageStyle.roleVerbosity);
-  const showSubtitleOverlay = speech.isSpeaking;
   const transcriptBlocks = recorder.partialText
     ? [...recorder.paragraphs, recorder.partialText]
     : recorder.paragraphs;
@@ -88,6 +92,25 @@ function App() {
       })),
     [recorder.transcriptParagraphs]
   );
+  const locatedPhraseMessages = useMemo<PhraseLocationMapMessage[]>(() => {
+    const sentences = transcriptParagraphs.flatMap((paragraph) => paragraph.sentences);
+    return recorder.audioParts
+      .filter((part) => typeof part.LAT === "number" && typeof part.LONG === "number")
+      .map((part) => ({
+        id: part.name,
+        sequence: part.sequence,
+        text: sentences[part.sequence]?.text || part.name,
+        LAT: part.LAT as number,
+        LONG: part.LONG as number,
+        startIso: part.startIso
+      }));
+  }, [recorder.audioParts, transcriptParagraphs]);
+  const transcriptSentences = useMemo(
+    () => transcriptParagraphs.flatMap((paragraph) => paragraph.sentences),
+    [transcriptParagraphs]
+  );
+  const speech = useSubtitleSpeech(transcriptText, transcriptSentences, settings.tts, updateTtsSettings);
+  const showSubtitleOverlay = speech.isSpeaking;
   const playbackText = transcriptBlocks.join("\n").trim();
   const transcriptPlaybackOptions = useMemo(
     () => [
@@ -144,8 +167,29 @@ function App() {
     transcriptPlaybackChoice === "source:original" ? "source-audio" : "tts";
   const isSentencePlaybackUnavailable = sentencePlaybackMode === "source-audio" && !recorder.sourceMedia;
   const subtitleText = speech.isSpeaking ? speech.activePhraseText || transcriptText : "";
-  const setSubtitleCanvas = useJassubSubtitles(subtitleText);
+  const setSubtitleCanvas = useJassubSubtitles(subtitleText, settings.subtitles);
   const isBusyTranscribingMedia = recorder.isTranscribingMedia;
+  const heroTitle = recorder.isRecording
+    ? "Recording live transcript"
+    : isBusyTranscribingMedia
+      ? "Transcribing your media"
+      : transcriptBlocks.length > 0
+        ? "Transcript workspace"
+        : "Word Trail";
+  const heroDescription = recorder.isRecording
+    ? "The microphone is live. Your transcript will keep updating below as new speech arrives."
+    : isBusyTranscribingMedia
+      ? "Uploaded media is being processed locally. You can follow progress and review the transcript as chunks finish."
+      : transcriptBlocks.length > 0
+        ? "Review, play back, and follow the transcript from one focused workspace."
+        : "Record from the microphone or upload audio and video files for fast local transcription.";
+  const statusLabel = recorder.isRecording
+    ? "Live microphone"
+    : isBusyTranscribingMedia
+      ? "Media transcription"
+      : recorder.sourceMedia
+        ? "Uploaded media ready"
+        : "Ready to record";
   const handleMediaFiles = useCallback(
     (files: FileList | null) => {
       if (!files) return;
@@ -249,7 +293,8 @@ function App() {
         recorder.sourceMedia
           ? { url: recorder.sourceMedia.url, kind: recorder.sourceMedia.kind }
           : null,
-        "original"
+        "original",
+        { sentences: transcriptSentences }
       );
       return;
     }
@@ -257,13 +302,14 @@ function App() {
     if (transcriptPlaybackChoice === "source:normalized" && recorder.sourceMedia) {
       speech.playSourceMedia(
         { url: recorder.sourceMedia.url, kind: recorder.sourceMedia.kind },
-        "normalized"
+        "normalized",
+        { sentences: transcriptSentences }
       );
       return;
     }
 
     speech.speakText(playbackText);
-  }, [playbackText, recorder.sourceMedia, speech, transcriptPlaybackChoice]);
+  }, [playbackText, recorder.sourceMedia, speech, transcriptPlaybackChoice, transcriptSentences]);
 
   useEffect(() => {
     const container = transcriptRef.current;
@@ -318,204 +364,225 @@ function App() {
         onUpdate={updateSettings}
       />
 
-      <header className="top-bar" aria-label="Application controls">
-        <div className="primary-actions">
-          <button
-            className="record-button"
-            type="button"
-            onClick={recorder.isRecording ? recorder.stop : recorder.start}
-            disabled={recorder.isPreparing || recorder.isTranscribingMedia}
-            title={recorder.isRecording ? "Stop recording" : "Start recording"}
-            aria-label={recorder.isRecording ? "Stop recording" : "Start recording"}
-          >
-            {recorder.isRecording ? <Square size={30} /> : <Circle size={34} />}
-            <span>{recorder.isRecording ? "Stop recording" : recorder.isPreparing ? "Loading" : "Record"}</span>
-          </button>
-          <button
-            className="upload-button"
-            type="button"
-            onClick={() => mediaInputRef.current?.click()}
-            disabled={recorder.isRecording || recorder.isPreparing || recorder.isModelLoading}
-            title="Upload media"
-            aria-label="Upload media"
-          >
-            <Upload size={22} />
-            <span>Upload media</span>
-          </button>
-          <input
-            ref={mediaInputRef}
-            className="media-input"
-            type="file"
-            accept="audio/*,video/*"
-            onChange={handleMediaInputChange}
-          />
-        </div>
-        <button
-          className="settings-button"
-          type="button"
-          onClick={() => setIsSettingsOpen(true)}
-          title="Settings"
-          aria-label="Settings"
-        >
-          <SlidersHorizontal size={22} />
-          <span>Settings</span>
-        </button>
-      </header>
+      <div className="app-layout">
+        <header className="top-bar" aria-label="Application controls">
+          <div className="hero-copy">
+            <span className="hero-kicker">{statusLabel}</span>
+            <h1>{heroTitle}</h1>
+            <p>{heroDescription}</p>
+          </div>
+          <div className="hero-actions">
+            <div className="primary-actions">
+              <button
+                className="record-button"
+                type="button"
+                onClick={recorder.isRecording ? recorder.stop : recorder.start}
+                disabled={recorder.isPreparing || recorder.isTranscribingMedia}
+                title={recorder.isRecording ? "Stop recording" : "Start recording"}
+                aria-label={recorder.isRecording ? "Stop recording" : "Start recording"}
+              >
+                {recorder.isRecording ? <Square size={28} /> : <Circle size={30} />}
+                <span>{recorder.isRecording ? "Stop recording" : recorder.isPreparing ? "Loading" : "Record"}</span>
+              </button>
+              <button
+                className="upload-button"
+                type="button"
+                onClick={() => mediaInputRef.current?.click()}
+                disabled={recorder.isRecording || recorder.isPreparing || recorder.isModelLoading}
+                title="Upload media"
+                aria-label="Upload media"
+              >
+                <Upload size={20} />
+                <span>Upload media</span>
+              </button>
+              <input
+                ref={mediaInputRef}
+                className="media-input"
+                type="file"
+                accept="audio/*,video/*"
+                onChange={handleMediaInputChange}
+              />
+            </div>
+            <button
+              className="settings-button"
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              title="Settings"
+              aria-label="Settings"
+            >
+              <SlidersHorizontal size={20} />
+              <span>Settings</span>
+            </button>
+          </div>
+        </header>
 
-      <section ref={transcriptRef} className="transcript" aria-label={aria.transcript}>
-        <div className="transcript-body">
-          {transcriptBlocks.length > 0 ? (
-            <>
-              {isBusyTranscribingMedia ? (
+        <section className="workspace-shell" aria-label="Transcript workspace">
+          <section ref={transcriptRef} className="transcript" aria-label={aria.transcript}>
+            <div className="transcript-body">
+              {transcriptBlocks.length > 0 ? (
+                <>
+                  {isBusyTranscribingMedia ? (
+                    <div className="transcript-busy-state" role="status" aria-live="polite">
+                      <div className="transcript-busy-spinner" aria-hidden="true" />
+                      <p>Transcription is running in the background. New text appears here as each chunk finishes.</p>
+                    </div>
+                  ) : null}
+                  {transcriptBlocks.map((paragraph, index) => (
+                    <div
+                      key={`${index}-${paragraph.slice(0, 16)}`}
+                      className={index === transcriptBlocks.length - 1 && recorder.partialText ? "partial" : "transcript-paragraph"}
+                    >
+                      {index < transcriptParagraphs.length ? (
+                        transcriptParagraphs[index].sentences.map((sentence) => {
+                          return (
+                            <button
+                              key={sentence.id}
+                              type="button"
+                              className={`sentence-button${speech.activeSentenceId === sentence.id ? " active" : ""}`}
+                              onClick={() =>
+                                speech.playSentence(
+                                  sentence,
+                                  recorder.sourceMedia
+                                    ? { url: recorder.sourceMedia.url, kind: recorder.sourceMedia.kind }
+                                    : null,
+                                  sentencePlaybackMode
+                                )
+                              }
+                              disabled={isSentencePlaybackUnavailable}
+                              title={
+                                sentencePlaybackMode === "source-audio"
+                                  ? recorder.sourceMedia
+                                    ? `Play from ${recorder.sourceMedia.fileName}`
+                                    : "Original source audio is only available for uploaded media."
+                                  : `Read this sentence aloud as ${selectedTranscriptPlaybackOption?.label ?? "the selected voice"}.`
+                              }
+                            >
+                              {sentence.words.length > 0
+                                ? sentence.words.map((word, wordIndex) => (
+                                    <span
+                                      key={`${sentence.id}-${wordIndex}-${word.startMs}`}
+                                      className={
+                                        speech.activeSentenceId === sentence.id && speech.activeWordIndex === wordIndex
+                                          ? "sentence-word active"
+                                          : "sentence-word"
+                                      }
+                                    >
+                                      {word.text}
+                                    </span>
+                                  ))
+                                : sentence.text}
+                            </button>
+                          );
+                        })
+                      ) : (
+                        paragraph
+                      )}
+                    </div>
+                  ))}
+                  <div ref={transcriptEndRef} className="transcript-end-anchor" aria-hidden="true" />
+                </>
+              ) : isBusyTranscribingMedia ? (
                 <div className="transcript-busy-state" role="status" aria-live="polite">
                   <div className="transcript-busy-spinner" aria-hidden="true" />
-                  <p>Transcription is running in the background. New text appears here as each chunk finishes.</p>
+                  <p>Transcription is running in the background.</p>
                 </div>
-              ) : null}
-              {transcriptBlocks.map((paragraph, index) => (
-                <div
-                  key={`${index}-${paragraph.slice(0, 16)}`}
-                  className={index === transcriptBlocks.length - 1 && recorder.partialText ? "partial" : "transcript-paragraph"}
-                >
-                  {index < transcriptParagraphs.length ? (
-                    transcriptParagraphs[index].sentences.map((sentence) => {
-                      return (
-                        <button
-                          key={sentence.id}
-                          type="button"
-                          className={`sentence-button${speech.activeSentenceId === sentence.id ? " active" : ""}`}
-                          onClick={() =>
-                            speech.playSentence(
-                              sentence,
-                              recorder.sourceMedia
-                                ? { url: recorder.sourceMedia.url, kind: recorder.sourceMedia.kind }
-                                : null,
-                              sentencePlaybackMode
-                            )
-                          }
-                          disabled={isSentencePlaybackUnavailable}
-                          title={
-                            sentencePlaybackMode === "source-audio"
-                              ? recorder.sourceMedia
-                                ? `Play from ${recorder.sourceMedia.fileName}`
-                                : "Original source audio is only available for uploaded media."
-                              : `Read this sentence aloud as ${selectedTranscriptPlaybackOption?.label ?? "the selected voice"}.`
-                          }
-                        >
-                          {sentence.words.length > 0
-                            ? sentence.words.map((word, wordIndex) => (
-                                <span
-                                  key={`${sentence.id}-${wordIndex}-${word.startMs}`}
-                                  className={
-                                    speech.activeSentenceId === sentence.id && speech.activeWordIndex === wordIndex
-                                      ? "sentence-word active"
-                                      : "sentence-word"
-                                  }
-                                >
-                                  {word.text}
-                                </span>
-                              ))
-                            : sentence.text}
-                        </button>
-                      );
-                    })
-                  ) : (
-                    paragraph
-                  )}
+              ) : (
+                <div className="empty-state">
+                  <p className="empty">
+                    Press record for live speech, or upload media to transcribe an existing audio or video file.
+                  </p>
                 </div>
-              ))}
-              <div ref={transcriptEndRef} className="transcript-end-anchor" aria-hidden="true" />
-            </>
-          ) : isBusyTranscribingMedia ? (
-            <div className="transcript-busy-state" role="status" aria-live="polite">
-              <div className="transcript-busy-spinner" aria-hidden="true" />
-              <p>Transcription is running in the background.</p>
+              )}
             </div>
+            {showSubtitleOverlay ? (
+              <div className="subtitle-layer" aria-hidden="true">
+                <canvas ref={setSubtitleCanvas} className="subtitle-canvas" />
+              </div>
+            ) : null}
+            {!isBusyTranscribingMedia && recorder.progress ? <p className="progress">{recorder.progress}</p> : null}
+            {recorder.error ? (
+              <p className="error" role="alert">
+                {recorder.error}
+              </p>
+            ) : null}
+          </section>
+
+          {locatedPhraseMessages.length > 0 ? (
+            <PhraseLocationMap messages={locatedPhraseMessages} />
           ) : (
-            <p className="empty">
-              Press record for live speech, or upload media to transcribe an existing audio or video file.
+            <p className="location-unknown" role="status">
+              Location unknown for this transcription
             </p>
           )}
-        </div>
-        {showSubtitleOverlay ? (
-          <div className="subtitle-layer" aria-hidden="true">
-            <canvas ref={setSubtitleCanvas} className="subtitle-canvas" />
-          </div>
-        ) : null}
-        {!isBusyTranscribingMedia && recorder.progress ? <p className="progress">{recorder.progress}</p> : null}
-        {recorder.error ? (
-          <p className="error" role="alert">
-            {recorder.error}
-          </p>
-        ) : null}
-      </section>
 
-      <div className="scroll-gadget" aria-label="Transcript controls">
-        {!isBusyTranscribingMedia && playbackText ? (
-          <div className="playback-gadget">
-            <button
-              className="speech-button playback-cta"
-              type="button"
-              onClick={playTranscript}
-              disabled={!speech.isSpeechSupported && transcriptPlaybackChoice !== "source:original"}
-              title={
-                !speech.isSpeechSupported && transcriptPlaybackChoice !== "source:original"
-                  ? "The selected speech engine is not available in this browser."
-                  : speech.isSpeaking
-                    ? "Stop reading the transcript aloud"
-                    : `Play transcript as ${selectedTranscriptPlaybackOption?.label ?? "selected audio"}`
-              }
-              aria-label={speech.isSpeaking ? "Stop reading the transcript aloud" : "Read the transcript aloud"}
-            >
-              <span className="playback-cta-icon" aria-hidden="true">
-                {speech.isSpeaking ? <Square size={22} /> : <Play size={22} />}
-              </span>
-              <span className="playback-cta-copy">
-                <strong>{speech.isSpeaking ? "Stop playback" : "Play transcript"}</strong>
-                <small>{selectedTranscriptPlaybackOption?.label ?? "Select a playback voice"}</small>
-              </span>
-            </button>
-            <label className="transcript-playback-picker">
-              <span className="playback-picker-label">Voice</span>
-              <span className="playback-picker-description">
-                {selectedTranscriptPlaybackOption?.description ?? "Choose how the transcript is read aloud."}
-              </span>
-              <select
-                aria-label="Transcript playback voice"
-                className="playback-select"
-                value={transcriptPlaybackChoice}
-                disabled={speech.isSpeaking}
-                onChange={(event) =>
-                  handleTranscriptPlaybackChoice(event.target.value as TranscriptPlaybackChoice)
-                }
-              >
-                {transcriptPlaybackOptions.map((group) => (
-                  <optgroup key={group.group} label={group.group}>
-                    {group.items.map((item) => (
-                      <option key={item.value} value={item.value} disabled={item.disabled}>
-                        {item.icon} {item.label}
-                      </option>
+          <div className="scroll-gadget" aria-label="Transcript controls">
+            {!isBusyTranscribingMedia && playbackText ? (
+              <div className="playback-gadget">
+                <button
+                  className="speech-button playback-cta"
+                  type="button"
+                  onClick={playTranscript}
+                  disabled={!speech.isSpeechSupported && transcriptPlaybackChoice !== "source:original"}
+                  title={
+                    !speech.isSpeechSupported && transcriptPlaybackChoice !== "source:original"
+                      ? "The selected speech engine is not available in this browser."
+                      : speech.isSpeaking
+                        ? "Stop reading the transcript aloud"
+                        : `Play transcript as ${selectedTranscriptPlaybackOption?.label ?? "selected audio"}`
+                  }
+                  aria-label={speech.isSpeaking ? "Stop reading the transcript aloud" : "Read the transcript aloud"}
+                >
+                  <span className="playback-cta-icon" aria-hidden="true">
+                    {speech.isSpeaking ? <Square size={22} /> : <Play size={22} />}
+                  </span>
+                  <span className="playback-cta-copy">
+                    <strong>{speech.isSpeaking ? "Stop playback" : "Play transcript"}</strong>
+                    <small>{selectedTranscriptPlaybackOption?.label ?? "Select a playback voice"}</small>
+                  </span>
+                </button>
+                <label className="transcript-playback-picker">
+                  <span className="playback-picker-label">Voice</span>
+                  <span className="playback-picker-description">
+                    {selectedTranscriptPlaybackOption?.description ?? "Choose how the transcript is read aloud."}
+                  </span>
+                  <select
+                    aria-label="Transcript playback voice"
+                    className="playback-select"
+                    value={transcriptPlaybackChoice}
+                    disabled={speech.isSpeaking}
+                    onChange={(event) =>
+                      handleTranscriptPlaybackChoice(event.target.value as TranscriptPlaybackChoice)
+                    }
+                  >
+                    {transcriptPlaybackOptions.map((group) => (
+                      <optgroup key={group.group} label={group.group}>
+                        {group.items.map((item) => (
+                          <option key={item.value} value={item.value} disabled={item.disabled}>
+                            {item.icon} {item.label}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
+                  </select>
+                </label>
+              </div>
+            ) : null}
+            <div className="follow-gadget" aria-label="Transcript follow mode">
+              <label>Follow transcript</label>
+              <button
+                type="button"
+                className="scroll-toggle-button"
+                onClick={() => setIsAutoScrollEnabled((current) => !current)}
+                title={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
+                aria-label={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
+                aria-pressed={isAutoScrollEnabled}
+              >
+                {isAutoScrollEnabled ? <Pause size={16} /> : <Play size={16} />}
+                <span>{isAutoScrollEnabled ? "Auto" : "Manual"}</span>
+              </button>
+            </div>
           </div>
-        ) : null}
-        <div className="follow-gadget" aria-label="Transcript follow mode">
-          <label>Follow</label>
-          <button
-            type="button"
-            className="scroll-toggle-button"
-            onClick={() => setIsAutoScrollEnabled((current) => !current)}
-            title={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
-            aria-label={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
-            aria-pressed={isAutoScrollEnabled}
-          >
-            {isAutoScrollEnabled ? <Pause size={16} /> : <Play size={16} />}
-            <span>{isAutoScrollEnabled ? "Auto" : "Manual"}</span>
-          </button>
-        </div>
+        </section>
       </div>
 
       <div className="waveform-strip" aria-hidden="true">

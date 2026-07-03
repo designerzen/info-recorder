@@ -1,5 +1,6 @@
 import type { AllTasks } from "@huggingface/transformers";
 import type { AppSettings } from "../config/settings";
+import { runSileroVadFrames, type SileroVadRuntimeState } from "./sileroVad";
 
 export type VoiceActivity = {
   hasSpeech: boolean;
@@ -20,7 +21,8 @@ export async function detectVoiceActivity(
   audio: Float32Array,
   sampleRate: number,
   settings: AppSettings["vad"],
-  adaptiveState?: AdaptiveVadState
+  adaptiveState?: AdaptiveVadState,
+  sileroState?: SileroVadRuntimeState
 ): Promise<VoiceActivity> {
   if (settings.mode === "fixed-rms") {
     return detectFixedRms(audio, sampleRate, settings);
@@ -30,11 +32,55 @@ export async function detectVoiceActivity(
     return detectRmsZcr(audio, sampleRate, settings);
   }
 
+  if (settings.mode === "silero-vad") {
+    return detectWithSilero(audio, sampleRate, settings, sileroState);
+  }
+
   if (settings.mode === "transformers-audio-classification") {
     return detectWithTransformers(audio, sampleRate, settings);
   }
 
   return detectAdaptiveRms(audio, sampleRate, settings, adaptiveState);
+}
+
+async function detectWithSilero(
+  audio: Float32Array,
+  sampleRate: number,
+  settings: AppSettings["vad"],
+  sileroState?: SileroVadRuntimeState
+): Promise<VoiceActivity> {
+  try {
+    const frames = await runSileroVadFrames(
+      audio,
+      sampleRate,
+      sileroState,
+      settings.silero.modelId
+    );
+    const voicedFrames = frames.map((frame) => frame.probability >= settings.silero.threshold);
+    const speechMs = frames.reduce(
+      (total, frame, index) =>
+        voicedFrames[index]
+          ? total + ((frame.endSample - frame.startSample) / sampleRate) * 1000
+          : total,
+      0
+    );
+    let trailingSilenceMs = 0;
+
+    for (let index = frames.length - 1; index >= 0; index -= 1) {
+      if (voicedFrames[index]) break;
+      const frame = frames[index];
+      trailingSilenceMs += ((frame.endSample - frame.startSample) / sampleRate) * 1000;
+    }
+
+    return {
+      hasSpeech: speechMs >= settings.minSpeechMs,
+      score: frames.reduce((best, frame) => Math.max(best, frame.probability), 0),
+      trailingSilenceMs,
+      mode: "silero-vad"
+    };
+  } catch {
+    return detectSileroFallback(audio, sampleRate, settings);
+  }
 }
 
 function detectAdaptiveRms(
@@ -159,6 +205,18 @@ function detectFallback(audio: Float32Array, sampleRate: number, settings: AppSe
   }
 
   if (settings.ml.fallbackMode === "rms-zcr") {
+    return detectRmsZcr(audio, sampleRate, settings);
+  }
+
+  return detectAdaptiveRms(audio, sampleRate, settings);
+}
+
+function detectSileroFallback(audio: Float32Array, sampleRate: number, settings: AppSettings["vad"]) {
+  if (settings.silero.fallbackMode === "fixed-rms") {
+    return detectFixedRms(audio, sampleRate, settings);
+  }
+
+  if (settings.silero.fallbackMode === "rms-zcr") {
     return detectRmsZcr(audio, sampleRate, settings);
   }
 

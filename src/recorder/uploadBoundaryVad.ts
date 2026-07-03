@@ -1,17 +1,11 @@
-import type { Tensor } from "@huggingface/transformers";
-import { resampleLinear } from "./audioUtils";
+import {
+  runSileroVadFrames,
+  SILERO_VAD_SAMPLE_RATE,
+  SILERO_VAD_WINDOW_SAMPLES,
+  type SileroVadRuntimeState
+} from "./sileroVad";
 
-const MODEL_ID = "BricksDisplay/silero-vad-6.2";
-const VAD_SAMPLE_RATE = 16_000;
-const VAD_WINDOW_SAMPLES = 512;
-const VAD_STATE_SAMPLES = 2 * 1 * 128;
 const SPEECH_THRESHOLD = 0.5;
-
-type TensorMap = Record<string, Tensor>;
-type CallableVadModel = (inputs: TensorMap) => Promise<TensorMap>;
-type TensorConstructor = new (...args: [string, ArrayLike<number | bigint>, number[]]) => Tensor;
-
-let modelPromise: Promise<{ model: CallableVadModel; Tensor: TensorConstructor }> | null = null;
 
 export async function findVadBoundaryEnd(
   audio: Float32Array,
@@ -19,96 +13,43 @@ export async function findVadBoundaryEnd(
   searchStart: number,
   searchEnd: number,
   sampleRate: number,
-  requiredQuietSamples: number
+  requiredQuietSamples: number,
+  modelId?: string
 ) {
   if (searchEnd <= searchStart) return null;
 
-  const { model, Tensor } = await loadModel();
-  const source = audio.subarray(segmentStart, searchEnd);
-  const vadAudio =
-    sampleRate === VAD_SAMPLE_RATE ? source : resampleLinear(source, sampleRate, VAD_SAMPLE_RATE);
-  const sampleRatio = sampleRate / VAD_SAMPLE_RATE;
-  const requiredQuietVadSamples = Math.max(
-    VAD_WINDOW_SAMPLES,
-    Math.floor(requiredQuietSamples / sampleRatio)
+  const frames = await runSileroVadFrames(
+    audio.subarray(segmentStart, searchEnd),
+    sampleRate,
+    { state: null } satisfies SileroVadRuntimeState,
+    modelId
   );
-  let state = new Tensor("float32", new Float32Array(VAD_STATE_SAMPLES), [2, 1, 128]);
-  const sr = new Tensor("int64", [BigInt(VAD_SAMPLE_RATE)], []);
-  let quietStartVad: number | null = null;
+  const minWindowSamples = Math.round(
+    SILERO_VAD_WINDOW_SAMPLES * (sampleRate / SILERO_VAD_SAMPLE_RATE)
+  );
+  const requiredQuietVadSamples = Math.max(minWindowSamples, requiredQuietSamples);
+  let quietStart: number | null = null;
   let bestBoundary: number | null = null;
 
-  for (let start = 0; start < vadAudio.length; start += VAD_WINDOW_SAMPLES) {
-    const end = start + VAD_WINDOW_SAMPLES;
-    const window = new Float32Array(VAD_WINDOW_SAMPLES);
-    window.set(vadAudio.subarray(start, Math.min(vadAudio.length, end)));
+  for (const frame of frames) {
+    const sourceStart = segmentStart + frame.startSample;
+    const sourceEnd = Math.min(searchEnd, segmentStart + frame.endSample);
 
-    const output = await model({
-      input: new Tensor("float32", window, [1, VAD_WINDOW_SAMPLES]),
-      state,
-      sr
-    });
-    state = getNextState(output) ?? state;
-
-    const sourceEnd = segmentStart + Math.round(Math.min(end, vadAudio.length) * sampleRatio);
     if (sourceEnd < searchStart) {
-      quietStartVad = getSpeechProbability(output) < SPEECH_THRESHOLD ? start : null;
+      quietStart = frame.probability < SPEECH_THRESHOLD ? sourceStart : null;
       continue;
     }
 
-    if (getSpeechProbability(output) < SPEECH_THRESHOLD) {
-      quietStartVad ??= start;
-      if (end - quietStartVad >= requiredQuietVadSamples) {
-        bestBoundary = Math.min(searchEnd, sourceEnd);
+    if (frame.probability < SPEECH_THRESHOLD) {
+      quietStart ??= sourceStart;
+      if (sourceEnd - quietStart >= requiredQuietVadSamples) {
+        bestBoundary = sourceEnd;
       }
       continue;
     }
 
-    quietStartVad = null;
+    quietStart = null;
   }
 
   return bestBoundary;
-}
-
-async function loadModel() {
-  modelPromise ??= (async () => {
-    const { AutoModel, Tensor, env } = await import("@huggingface/transformers");
-    env.allowLocalModels = false;
-    env.allowRemoteModels = true;
-    env.useBrowserCache = false;
-    env.useWasmCache = false;
-
-    const model = await AutoModel.from_pretrained(MODEL_ID, {
-      dtype: "q8",
-      device: "wasm"
-    });
-    return {
-      model: model as unknown as CallableVadModel,
-      Tensor: Tensor as TensorConstructor
-    };
-  })().catch((cause) => {
-    modelPromise = null;
-    throw cause;
-  });
-
-  return modelPromise;
-}
-
-function getSpeechProbability(output: TensorMap) {
-  const tensor =
-    output.output ??
-    output.prob ??
-    output.probs ??
-    Object.entries(output).find(([key]) => !key.toLowerCase().includes("state"))?.[1];
-  const value = tensor?.data?.[0];
-  return typeof value === "number" ? value : Number(value ?? 0);
-}
-
-function getNextState(output: TensorMap) {
-  return (
-    output.state ??
-    output.stateN ??
-    output.state_n ??
-    Object.entries(output).find(([key]) => key.toLowerCase().includes("state"))?.[1] ??
-    null
-  );
 }

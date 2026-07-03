@@ -2,11 +2,13 @@ export type VadMode =
   | "adaptive-rms"
   | "fixed-rms"
   | "rms-zcr"
+  | "silero-vad"
   | "transformers-audio-classification";
 
 export type TtsProvider = "web-speech" | "supertonic-web";
 export type RecordingExportFormat = "native" | "ogg-vorbis" | "ogg-opus" | "mp3" | "flac" | "wav";
 export type SentencePlaybackMode = "tts" | "source-audio";
+import { defaultTypeface } from "./typefaces";
 export type OnnxTranscriptionModelId =
   | "onnx-community/whisper-tiny.en_timestamped"
   | "onnx-community/whisper-base.en_timestamped"
@@ -87,6 +89,11 @@ export type AppSettings = {
       minRms: number;
       minZeroCrossingRate: number;
       maxZeroCrossingRate: number;
+    };
+    silero: {
+      modelId: string;
+      threshold: number;
+      fallbackMode: Exclude<VadMode, "silero-vad" | "transformers-audio-classification">;
     };
     ml: {
       modelId: string;
@@ -173,6 +180,11 @@ export const appSettings: AppSettings = {
       minZeroCrossingRate: 0.015,
       maxZeroCrossingRate: 0.35
     },
+    silero: {
+      modelId: "BricksDisplay/silero-vad-6.2",
+      threshold: 0.5,
+      fallbackMode: "adaptive-rms"
+    },
     ml: {
       modelId: "BricksDisplay/silero-vad-6.2",
       device: "webgpu",
@@ -188,7 +200,7 @@ export const appSettings: AppSettings = {
   subtitles: {
     renderer: "jassub",
     assDurationSeconds: 60,
-    fontFamily: "Arial",
+    fontFamily: defaultTypeface.assFamily,
     fontSize: 54,
     marginV: 58
   },

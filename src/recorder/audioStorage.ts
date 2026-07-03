@@ -15,6 +15,8 @@ export type StoredAudioPart = {
   startIso: string;
   endIso: string;
   durationMs: number;
+  LAT: number | null;
+  LONG: number | null;
   chunks: string[];
 };
 

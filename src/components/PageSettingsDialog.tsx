@@ -199,7 +199,7 @@ export function PageSettingsControls({ settings, onChange }: PageSettingsControl
 
       <SettingsGroup title="Fonts">
         <label className="settings-control">
-          <span>Font family</span>
+          <span>Typeface</span>
           <select value={settings.fontFamily} onChange={(event) => update({ fontFamily: event.target.value })}>
             {fontFamilyOptions.map((option) => (
               <option key={option.value} value={option.value}>

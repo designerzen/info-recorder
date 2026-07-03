@@ -3,17 +3,35 @@ import JASSUB from "jassub";
 import workerUrl from "jassub/dist/worker/worker.js?worker&url";
 import wasmUrl from "jassub/dist/wasm/jassub-worker.wasm?url";
 import modernWasmUrl from "jassub/dist/wasm/jassub-worker-modern.wasm?url";
-import defaultFontUrl from "jassub/dist/default.woff2?url";
+import type { AppSettings } from "../config/settings";
+import { subtitleFontAssets } from "./subtitleTypefaceAssets";
 import { createLiveAssSubtitle } from "./subtitleAss";
 
 type JassubInstance = InstanceType<typeof JASSUB>;
 
-export function useJassubSubtitles(text: string) {
+export function useJassubSubtitles(text: string, subtitleSettings: AppSettings["subtitles"]) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const instanceRef = useRef<JassubInstance | null>(null);
   const rafRef = useRef<number | null>(null);
   const startTimeRef = useRef(performance.now());
   const textRef = useRef(text);
+  const subtitleSettingsRef = useRef(subtitleSettings);
+
+  const getTrack = useCallback(
+    () =>
+      createLiveAssSubtitle(textRef.current, {
+        durationSeconds: subtitleSettingsRef.current.assDurationSeconds,
+        fontFamily: subtitleSettingsRef.current.fontFamily,
+        fontSize: subtitleSettingsRef.current.fontSize,
+        marginV: subtitleSettingsRef.current.marginV
+      }),
+    []
+  );
+
+  const getDefaultFont = useCallback(() => {
+    const fontKey = subtitleSettingsRef.current.fontFamily.toLowerCase();
+    return subtitleFontAssets[fontKey] ? fontKey : Object.keys(subtitleFontAssets)[0];
+  }, []);
 
   const renderFrame = useCallback(() => {
     const canvas = canvasRef.current;
@@ -38,14 +56,12 @@ export function useJassubSubtitles(text: string) {
 
       const instance = new JASSUB({
         canvas,
-        subContent: createLiveAssSubtitle(textRef.current),
+        subContent: getTrack(),
         workerUrl,
         wasmUrl,
         modernWasmUrl,
-        availableFonts: {
-          "liberation sans": defaultFontUrl
-        },
-        defaultFont: "liberation sans",
+        availableFonts: subtitleFontAssets,
+        defaultFont: getDefaultFont(),
         queryFonts: false
       });
 
@@ -54,7 +70,7 @@ export function useJassubSubtitles(text: string) {
         renderFrame();
       });
     },
-    [renderFrame]
+    [getDefaultFont, getTrack, renderFrame]
   );
 
   useEffect(() => {
@@ -62,10 +78,16 @@ export function useJassubSubtitles(text: string) {
     const instance = instanceRef.current;
     if (!instance) return;
 
-    void instance.ready.then(() =>
-      instance.renderer.setTrack(createLiveAssSubtitle(textRef.current))
-    );
-  }, [text]);
+    void instance.ready.then(() => instance.renderer.setTrack(getTrack()));
+  }, [getTrack, text]);
+
+  useEffect(() => {
+    subtitleSettingsRef.current = subtitleSettings;
+    const instance = instanceRef.current;
+    if (!instance) return;
+
+    void instance.ready.then(() => instance.renderer.setTrack(getTrack()));
+  }, [getTrack, subtitleSettings]);
 
   useEffect(() => {
     return () => {

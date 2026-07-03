@@ -23,8 +23,15 @@ type SentencePlaybackTarget = {
   sourceMedia: SourceMediaPlayback | null;
 };
 
+type ActiveTranscriptPosition = {
+  sentenceId: string;
+  sentenceText: string;
+  wordIndex: number;
+};
+
 export function useSubtitleSpeech(
   text: string,
+  transcriptSentences: TranscriptSentence[],
   settings: RuntimeTtsSettings,
   setSettingsValue: (update: Partial<RuntimeTtsSettings>) => void
 ) {
@@ -138,7 +145,11 @@ export function useSubtitleSpeech(
   }, []);
 
   const playSourceMedia = useCallback(
-    async (sourceMedia: SourceMediaPlayback | null, mode: SourceMediaPlaybackMode = "original") => {
+    async (
+      sourceMedia: SourceMediaPlayback | null,
+      mode: SourceMediaPlaybackMode = "original",
+      transcriptPlayback?: { sentences: TranscriptSentence[] }
+    ) => {
       if (!sourceMedia) return;
 
       stopSpeaking();
@@ -147,13 +158,34 @@ export function useSubtitleSpeech(
       element.preload = "auto";
       element.src = sourceMedia.url;
       mediaRef.current = element;
-      setActivePhraseText(mode === "normalized" ? "Normalised audio" : "Original audio");
+      const sentences = transcriptPlayback?.sentences ?? transcriptSentences;
+      setActivePhraseText(
+        sentences[0]?.text ?? (mode === "normalized" ? "Normalised audio" : "Original audio")
+      );
       setSpeechStatus(
         mode === "normalized"
           ? `Playing normalised ${sourceMedia.kind} audio.`
           : `Playing original ${sourceMedia.kind}.`
       );
-      element.onplay = () => setIsSpeaking(true);
+      const tick = () => {
+        if (speechRunRef.current !== runId || mediaRef.current !== element) return;
+        const activePosition = getActiveTranscriptPosition(sentences, element.currentTime * 1000);
+        if (activePosition) {
+          setActiveSentenceId(activePosition.sentenceId);
+          setActiveWordIndex(activePosition.wordIndex);
+          setActivePhraseText(activePosition.sentenceText);
+        } else {
+          setActiveSentenceId(null);
+          setActiveWordIndex(-1);
+        }
+        wordFrameRef.current = window.requestAnimationFrame(tick);
+      };
+      element.onplay = () => {
+        setIsSpeaking(true);
+        if (sentences.length > 0) {
+          wordFrameRef.current = window.requestAnimationFrame(tick);
+        }
+      };
       element.onended = () => {
         if (speechRunRef.current === runId) {
           resetActiveSpeech();
@@ -185,7 +217,7 @@ export function useSubtitleSpeech(
         }
       }
     },
-    [connectNormalizedSourceMedia, resetActiveSpeech, stopSpeaking]
+    [connectNormalizedSourceMedia, resetActiveSpeech, stopSpeaking, transcriptSentences]
   );
 
   useEffect(() => {
@@ -609,6 +641,43 @@ export function useSubtitleSpeech(
     playSourceMedia,
     playSentence,
     stopSpeaking
+  };
+}
+
+export function getActiveTranscriptPosition(
+  sentences: TranscriptSentence[],
+  currentMs: number
+): ActiveTranscriptPosition | null {
+  if (sentences.length === 0 || !Number.isFinite(currentMs) || currentMs < 0) {
+    return null;
+  }
+
+  const activeSentence =
+    sentences.find((sentence) => currentMs >= sentence.startMs && currentMs < sentence.endMs) ??
+    sentences.find((sentence) => sentence.words.length > 0 && currentMs < sentence.words[0].startMs) ??
+    null;
+
+  if (!activeSentence) {
+    return null;
+  }
+
+  if (activeSentence.words.length === 0) {
+    return {
+      sentenceId: activeSentence.id,
+      sentenceText: activeSentence.text,
+      wordIndex: -1
+    };
+  }
+
+  const activeWordIndex = activeSentence.words.findIndex(
+    (word) => currentMs >= word.startMs && currentMs < word.endMs
+  );
+  const fallbackWordIndex = currentMs < activeSentence.words[0].startMs ? 0 : activeSentence.words.length - 1;
+
+  return {
+    sentenceId: activeSentence.id,
+    sentenceText: activeSentence.text,
+    wordIndex: activeWordIndex === -1 ? fallbackWordIndex : activeWordIndex
   };
 }
 

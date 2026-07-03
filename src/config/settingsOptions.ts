@@ -16,6 +16,7 @@ import {
   encodePageStyle,
   type PageStyleSettings
 } from "./pageStyle";
+import { getTypefaceAssFamily } from "./typefaces";
 
 export type RuntimeTtsSettings = AppSettings["tts"] & {
   enabled: boolean;
@@ -95,6 +96,7 @@ export const defaultRuntimeSettings: RuntimeSettings = {
     adaptiveRms: { ...appSettings.vad.adaptiveRms },
     fixedRms: { ...appSettings.vad.fixedRms },
     rmsZcr: { ...appSettings.vad.rmsZcr },
+    silero: { ...appSettings.vad.silero },
     ml: {
       ...appSettings.vad.ml,
       speechLabels: [...appSettings.vad.ml.speechLabels]
@@ -128,6 +130,7 @@ export const vadModeOptions: SelectOption<VadMode>[] = [
   { value: "adaptive-rms", label: "Adaptive RMS" },
   { value: "fixed-rms", label: "Fixed RMS" },
   { value: "rms-zcr", label: "RMS + zero crossings" },
+  { value: "silero-vad", label: "Silero VAD" },
   { value: "transformers-audio-classification", label: "Transformers audio classifier" }
 ];
 
@@ -417,6 +420,24 @@ export const settingsOptions: SettingsOption[] = [
     })
   },
   {
+    key: "sileroSpeechThreshold",
+    section: "activity",
+    label: "Silero speech confidence",
+    kind: "slider",
+    min: 0.05,
+    max: 0.95,
+    step: 0.05,
+    valueLabel: (value) => `${Math.round(value * 100)}%`,
+    getValue: (settings) => settings.vad.silero.threshold,
+    setValue: (settings, value) => ({
+      ...settings,
+      vad: {
+        ...settings.vad,
+        silero: { ...settings.vad.silero, threshold: value }
+      }
+    })
+  },
+  {
     key: "mlSpeechThreshold",
     section: "activity",
     label: "ML speech confidence",
@@ -699,6 +720,10 @@ export function readSettingsFromUrl(search = window.location.search) {
       deviceId: microphoneDeviceId ?? settings.microphone.deviceId
     },
     pageStyle,
+    subtitles: {
+      ...settings.subtitles,
+      fontFamily: getTypefaceAssFamily(pageStyle.fontFamily)
+    },
     tts: {
       ...settings.tts,
       selectedVoiceId: selectedVoiceId ?? settings.tts.selectedVoiceId
@@ -731,6 +756,7 @@ export function cloneRuntimeSettings(settings: RuntimeSettings): RuntimeSettings
       adaptiveRms: { ...settings.vad.adaptiveRms },
       fixedRms: { ...settings.vad.fixedRms },
       rmsZcr: { ...settings.vad.rmsZcr },
+      silero: { ...settings.vad.silero },
       ml: {
         ...settings.vad.ml,
         speechLabels: [...settings.vad.ml.speechLabels]
@@ -755,6 +781,11 @@ export function cloneRuntimeSettings(settings: RuntimeSettings): RuntimeSettings
 export function getRealtimeSilenceRms(settings: RuntimeSettings) {
   if (settings.vad.mode === "fixed-rms") return settings.vad.fixedRms.threshold;
   if (settings.vad.mode === "rms-zcr") return settings.vad.rmsZcr.minRms;
+  if (settings.vad.mode === "silero-vad") {
+    const fallbackMode = settings.vad.silero.fallbackMode;
+    if (fallbackMode === "fixed-rms") return settings.vad.fixedRms.threshold;
+    if (fallbackMode === "rms-zcr") return settings.vad.rmsZcr.minRms;
+  }
   if (settings.vad.mode === "transformers-audio-classification") {
     const fallbackMode = settings.vad.ml.fallbackMode;
     if (fallbackMode === "fixed-rms") return settings.vad.fixedRms.threshold;

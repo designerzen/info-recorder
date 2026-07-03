@@ -425,6 +425,9 @@ function SettingControl({
 function getActiveSilenceOption(settings: RuntimeSettings) {
   if (settings.vad.mode === "fixed-rms") return getOption("fixedSilence");
   if (settings.vad.mode === "rms-zcr") return getOption("zcrSilence");
+  if (settings.vad.mode === "silero-vad") {
+    return getOption("sileroSpeechThreshold");
+  }
   if (settings.vad.mode === "transformers-audio-classification") {
     return getOption("mlSpeechThreshold");
   }

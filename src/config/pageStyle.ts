@@ -1,5 +1,7 @@
 export type RoleVerbosity = "minimal" | "standard" | "detailed";
 
+import { defaultTypeface, typefaceOptions } from "./typefaces";
+
 export type PageStyleSettings = {
   preset: string;
   fontFamily: string;
@@ -43,18 +45,7 @@ type Option = {
   value: string;
 };
 
-export const fontFamilyOptions: Option[] = [
-  { value: "Arial, sans-serif", label: "Arial" },
-  { value: "Helvetica, Arial, sans-serif", label: "Helvetica" },
-  { value: "Verdana, sans-serif", label: "Verdana" },
-  { value: "Tahoma, sans-serif", label: "Tahoma" },
-  { value: "'Trebuchet MS', sans-serif", label: "Trebuchet MS" },
-  { value: "'Times New Roman', serif", label: "Times New Roman" },
-  { value: "Georgia, serif", label: "Georgia" },
-  { value: "'Courier New', monospace", label: "Courier New" },
-  { value: "OpenDyslexic, Verdana, sans-serif", label: "OpenDyslexic" },
-  { value: "monospace", label: "monospace" }
-];
+export const fontFamilyOptions: Option[] = typefaceOptions.map(({ label, value }) => ({ label, value }));
 
 export const roleVerbosityOptions: Array<{ label: string; value: RoleVerbosity }> = [
   { value: "minimal", label: "Minimal" },
@@ -82,7 +73,7 @@ export const pageStyleOptions = {
 
 export const defaultPageStyle: PageStyleSettings = {
   preset: "light-mode",
-  fontFamily: "Verdana, sans-serif",
+  fontFamily: defaultTypeface.value,
   fontSizePt: "12pt",
   fontWeight: "normal",
   fontStyle: "normal",
@@ -186,7 +177,7 @@ export const pageStylePresets: PageStylePreset[] = [
     textColor: "#111111"
   }),
   makePreset("Large Font Mono", "large-font-mono", {
-    fontFamily: "monospace",
+    fontFamily: "'Space Mono', monospace",
     fontSizePt: "18pt",
     lineHeight: "1.5",
     letterSpacing: "1px"
@@ -218,7 +209,7 @@ export const pageStylePresets: PageStylePreset[] = [
     focusColor: "#ff4fd8"
   }),
   makePreset("Open Dyslexic", "open-dyslexic", {
-    fontFamily: "OpenDyslexic, Verdana, sans-serif",
+    fontFamily: "'OpenDyslexic', sans-serif",
     fontSizePt: "14pt",
     lineHeight: "1.5",
     wordSpacing: "4px"

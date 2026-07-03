@@ -14,11 +14,14 @@ import type { RuntimeSettings } from "../config/settingsOptions";
 import { concatAudio, getRms, toMono } from "./audioUtils";
 import { exportRecordingBlob, getRecordingExportExtension } from "./audioExport";
 import { detectVoiceActivity, type AdaptiveVadState, type VoiceActivity } from "./vad";
+import { findVadBoundaryEnd } from "./uploadBoundaryVad";
+import { resetSileroVadRuntimeState, type SileroVadRuntimeState } from "./sileroVad";
 import { withTimeout } from "./asyncTimeout";
 import type { TranscriptParagraph, TranscriptWord } from "../transcript/timedTranscript";
 import { getTranscriptionRuntimeSupport } from "./runtimeSupport";
 import { isWasmTranscriptionModelId } from "../config/settings";
 import type { ModelInventoryEntry } from "./modelInventory";
+import { GeoLocationService } from "./geoLocationService";
 
 type WorkerMessage =
   | { type: "ready" }
@@ -107,6 +110,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   const opfsNextChunkStartMsRef = useRef(0);
   const currentPartChunksRef = useRef<StoredAudioChunk[]>([]);
   const currentPartStartsAtRef = useRef("");
+  const geoLocationServiceRef = useRef(new GeoLocationService());
   const tailRef = useRef<Float32Array>(new Float32Array());
   const latestVoiceRef = useRef<VoiceActivity>({
     hasSpeech: false,
@@ -116,6 +120,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   });
   const nextSegmentStartsParagraphRef = useRef(false);
   const adaptiveVadStateRef = useRef<AdaptiveVadState>({ noiseFloor: null });
+  const sileroVadStateRef = useRef<SileroVadRuntimeState>({ state: null });
   const hasTranscriptRef = useRef(false);
   const transcriptParagraphSequenceRef = useRef(0);
   const liveTranscribedSecondsRef = useRef(0);
@@ -425,6 +430,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     mediaRecorderRef.current = null;
     cleanupMediaSource();
     stopAnalyser();
+    geoLocationServiceRef.current.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     audioContextRef.current?.close();
@@ -438,6 +444,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     };
     nextSegmentStartsParagraphRef.current = false;
     adaptiveVadStateRef.current = { noiseFloor: null };
+    resetSileroVadRuntimeState(sileroVadStateRef.current);
     microphonePcmChunksRef.current = [];
     microphonePcmBufferedSamplesRef.current = 0;
     microphoneProcessQueueRef.current = Promise.resolve();
@@ -593,6 +600,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       opfsNextChunkStartMsRef.current = Date.now();
       currentPartChunksRef.current = [];
       currentPartStartsAtRef.current = "";
+      geoLocationServiceRef.current.start();
       setOpfsSessionName(`recordings/${session.name}`);
       setOpfsChunkCount(0);
       setAudioParts([]);
@@ -613,6 +621,7 @@ export function useTranscriber(settings: RuntimeSettings) {
         const sequence = activeSession.parts.length;
         const first = chunks[0];
         const last = chunks[chunks.length - 1];
+        const location = geoLocationServiceRef.current.finishPhrase();
         const part: StoredAudioPart = {
           name: `part-${sequence.toString().padStart(4, "0")}`,
           sequence,
@@ -623,6 +632,8 @@ export function useTranscriber(settings: RuntimeSettings) {
             new Date(last.endIso).getTime() -
               new Date(currentPartStartsAtRef.current || first.startIso).getTime()
           ),
+          LAT: location.LAT,
+          LONG: location.LONG,
           chunks: chunks.map((chunk) => chunk.fileName)
         };
 
@@ -654,6 +665,7 @@ export function useTranscriber(settings: RuntimeSettings) {
         if (voice.hasSpeech) {
           if (currentPartChunksRef.current.length === 0) {
             currentPartStartsAtRef.current = stored.startIso;
+            geoLocationServiceRef.current.startPhrase();
           }
 
           currentPartChunksRef.current.push(stored);
@@ -721,7 +733,8 @@ export function useTranscriber(settings: RuntimeSettings) {
         mono,
         sampleRate,
         settings.vad,
-        settings.vad.mode === "adaptive-rms" ? adaptiveVadStateRef.current : undefined
+        settings.vad.mode === "adaptive-rms" ? adaptiveVadStateRef.current : undefined,
+        settings.vad.mode === "silero-vad" ? sileroVadStateRef.current : undefined
       );
       latestVoiceRef.current = voice;
       const targetSamples = getSamplesForMs(sampleRate, settings.audio.transcriptionChunkMs);
@@ -1151,7 +1164,8 @@ export function useTranscriber(settings: RuntimeSettings) {
             const splitEnd = await getBufferedUploadedMediaSplitEnd(
               buffered,
               audioContext.sampleRate,
-              minChunkSamples
+              minChunkSamples,
+              settings
             );
             if (splitEnd === null) break;
 
@@ -1509,6 +1523,23 @@ async function getUploadedMediaSplitEnd(
     return allowPartialFinalChunk ? audio.length : null;
   }
 
+  if (settings.vad.enabled && settings.vad.mode === "silero-vad") {
+    const searchStart = offset + minSamples;
+    const searchEnd = Math.min(audio.length, offset + maxSamples);
+    const quietSamples = getSamplesForMs(sampleRate, settings.vad.partSilenceMs);
+    const boundary = await findVadBoundaryEnd(
+      audio,
+      offset,
+      searchStart,
+      searchEnd,
+      sampleRate,
+      quietSamples,
+      settings.vad.silero.modelId
+    );
+
+    if (boundary !== null) return boundary;
+  }
+
   if (remainingSamples >= maxSamples) {
     return offset + maxSamples;
   }
@@ -1520,11 +1551,27 @@ async function getUploadedMediaSplitEnd(
 async function getBufferedUploadedMediaSplitEnd(
   audio: Float32Array,
   sampleRate: number,
-  minSamples: number
+  minSamples: number,
+  settings: RuntimeSettings
 ) {
   if (audio.length < minSamples) return null;
 
   const targetSamples = getSamplesForMs(sampleRate, UPLOADED_MEDIA_TARGET_CHUNK_MS);
+
+  if (settings.vad.enabled && settings.vad.mode === "silero-vad") {
+    const quietSamples = getSamplesForMs(sampleRate, settings.vad.partSilenceMs);
+    const boundary = await findVadBoundaryEnd(
+      audio,
+      0,
+      minSamples,
+      Math.min(audio.length, targetSamples),
+      sampleRate,
+      quietSamples,
+      settings.vad.silero.modelId
+    );
+
+    if (boundary !== null) return boundary;
+  }
 
   if (audio.length >= targetSamples) {
     return targetSamples;
