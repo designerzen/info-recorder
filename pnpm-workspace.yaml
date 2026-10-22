@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: false
+  lfa-ponyfill: true
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: set this to true or false
