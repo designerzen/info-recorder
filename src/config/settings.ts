@@ -36,7 +36,11 @@ export type WasmWhisperModelId =
   | "medium-q5_0"
   | "large-q5_0";
 export type WasmTranscriptionModelId = `wasm:${WasmWhisperModelId}`;
-export type TranscriptionModelId = OnnxTranscriptionModelId | WasmTranscriptionModelId;
+export type MoonshineModelId =
+  | "moonshine:tiny-streaming-en"
+  | "moonshine:small-streaming-en"
+  | "moonshine:medium-streaming-en";
+export type TranscriptionModelId = OnnxTranscriptionModelId | WasmTranscriptionModelId | MoonshineModelId;
 
 export type SupertonicVoiceId =
   | "M1"
@@ -151,7 +155,7 @@ export const appSettings: AppSettings = {
     autoScrollSpeed: 5
   },
   transcription: {
-    modelId: "onnx-community/whisper-small.en_timestamped",
+    modelId: "moonshine:small-streaming-en",
     device: "webgpu",
     isMultilingual: false,
     language: "en",
@@ -239,6 +243,10 @@ export const appSettings: AppSettings = {
 
 export function isWasmTranscriptionModelId(modelId: TranscriptionModelId): modelId is WasmTranscriptionModelId {
   return modelId.startsWith("wasm:");
+}
+
+export function isMoonshineModelId(modelId: TranscriptionModelId): modelId is MoonshineModelId {
+  return modelId.startsWith("moonshine:");
 }
 
 export function getWasmWhisperModelId(modelId: WasmTranscriptionModelId): WasmWhisperModelId {

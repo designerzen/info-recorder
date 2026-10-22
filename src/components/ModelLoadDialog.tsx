@@ -49,7 +49,7 @@ export function ModelLoadDialog({
       <div className="model-dialog-copy">
         <h2 id="model-dialog-title">Downloading transcription model</h2>
         <p id="model-dialog-message">
-          Keep this tab open. The app is fetching Whisper model files and storing them in your
+          Keep this tab open. The app is fetching transcription model files and storing them in your
           offline model storage.
         </p>
       </div>

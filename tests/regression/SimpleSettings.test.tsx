@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -20,6 +20,9 @@ function renderSettings(
     isOpfsAvailable: true,
     isSpeaking: false,
     microphoneDevices: [],
+    modelDownloadSpeedBps: 0,
+    modelInventory: [],
+    modelInventoryMessage: "",
     selectedVoiceId: settings.tts.selectedVoiceId,
     settings,
     voiceOptions: [{ id: settings.tts.selectedVoiceId, name: "Default Voice" }],
@@ -39,6 +42,31 @@ function renderSettings(
 }
 
 describe("SimpleSettings regressions", () => {
+  it("offers volume presets and a percentage slider outside advanced settings", async () => {
+    const user = userEvent.setup();
+    const { props } = renderSettings();
+    const volumeOption = settingsOptions.find((option) => option.key === "speechVolume");
+    const playback = screen.getByRole("group", { name: "Playback" });
+    const slider = within(playback).getByRole("slider", { name: "Playback volume" });
+    expect(slider).toHaveAttribute("aria-valuetext", "90%");
+    for (const [label, value] of [["Mute", 0], ["Quiet", 0.25], ["Medium", 0.5], ["Full", 1]] as const) {
+      await user.click(within(playback).getByRole("button", { name: label }));
+      expect(props.onUpdate).toHaveBeenLastCalledWith(volumeOption, value);
+    }
+    fireEvent.change(slider, { target: { value: "0.65" } });
+    expect(props.onUpdate).toHaveBeenLastCalledWith(volumeOption, 0.65);
+  });
+
+  it("shows mute selection and prevents volume changes during playback", () => {
+    const settings = cloneRuntimeSettings(defaultRuntimeSettings);
+    settings.tts.volume = 0;
+    renderSettings({ settings, isSpeaking: true });
+    expect(screen.getByRole("slider", { name: "Playback volume" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Mute" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Full" })).toBeDisabled();
+    expect(screen.getByText("Muted")).toBeInTheDocument();
+  });
+
   it("does not render when closed", () => {
     renderSettings({ isOpen: false });
 
@@ -68,16 +96,16 @@ describe("SimpleSettings regressions", () => {
     expect(onUpdate).toHaveBeenCalledWith(vadOption, "fixed-rms");
   });
 
-  it("shows the Whisper model selector and forwards changes", async () => {
+  it("shows the transcription model selector and forwards changes", async () => {
     const user = userEvent.setup();
     const settings = cloneRuntimeSettings(defaultRuntimeSettings);
     const onUpdate = vi.fn();
     renderSettings({ settings, onUpdate });
 
-    expect(screen.getByLabelText("Whisper model")).toBeInTheDocument();
-    expect(screen.getByText("Default English-only timestamped model with a strong accuracy and size balance.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Transcription model")).toBeInTheDocument();
+    expect(screen.getByText("Default live-speech model, balancing Moonshine's streaming latency and accuracy.")).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("Whisper model"), "onnx-community/whisper-base.en_timestamped");
+    await user.selectOptions(screen.getByLabelText("Transcription model"), "onnx-community/whisper-base.en_timestamped");
 
     const modelOption = settingsOptions.find(
       (option) => option.key === "transcriptionModel"

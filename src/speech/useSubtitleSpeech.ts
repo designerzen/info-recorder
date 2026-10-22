@@ -21,6 +21,7 @@ type SourceMediaPlaybackMode = "original" | "normalized";
 type SentencePlaybackTarget = {
   sentence: TranscriptSentence;
   sourceMedia: SourceMediaPlayback | null;
+  sourceMode: SourceMediaPlaybackMode;
 };
 
 type ActiveTranscriptPosition = {
@@ -155,6 +156,7 @@ export function useSubtitleSpeech(
       stopSpeaking();
       const runId = speechRunRef.current;
       const element = document.createElement(sourceMedia.kind === "video" ? "video" : "audio");
+      element.volume = settings.volume;
       element.preload = "auto";
       element.src = sourceMedia.url;
       mediaRef.current = element;
@@ -181,6 +183,7 @@ export function useSubtitleSpeech(
         wordFrameRef.current = window.requestAnimationFrame(tick);
       };
       element.onplay = () => {
+        if (speechRunRef.current !== runId || mediaRef.current !== element) return;
         setIsSpeaking(true);
         if (sentences.length > 0) {
           wordFrameRef.current = window.requestAnimationFrame(tick);
@@ -217,7 +220,7 @@ export function useSubtitleSpeech(
         }
       }
     },
-    [connectNormalizedSourceMedia, resetActiveSpeech, stopSpeaking, transcriptSentences]
+    [connectNormalizedSourceMedia, resetActiveSpeech, settings.volume, stopSpeaking, transcriptSentences]
   );
 
   useEffect(() => {
@@ -336,6 +339,7 @@ export function useSubtitleSpeech(
           const url = URL.createObjectURL(blob);
           mediaUrlRef.current = url;
           const audio = new Audio(url);
+          audio.volume = settings.volume;
           mediaRef.current = audio;
           audio.onplay = () => setSpeechStatus(`Speaking phrase ${phraseIndex + 1}/${phrases.length} with Supertonic ${selectedVoiceId}.`);
           audio.onended = () => {
@@ -366,7 +370,7 @@ export function useSubtitleSpeech(
         setSpeechStatus(error instanceof Error ? error.message : "Supertonic speech synthesis failed.");
       }
     },
-    [resetActiveSpeech, selectedVoiceId]
+    [resetActiveSpeech, selectedVoiceId, settings.volume]
   );
 
   const speak = useCallback(
@@ -397,17 +401,18 @@ export function useSubtitleSpeech(
 
   const playSourceSentence = useCallback(
     (target: SentencePlaybackTarget, runId: number) => {
-      const { sentence, sourceMedia } = target;
-      if (!sourceMedia || sentence.words.length === 0) return;
+      const { sentence, sourceMedia, sourceMode } = target;
+      if (!sourceMedia || sentence.endMs <= sentence.startMs) return;
 
       const element = document.createElement(sourceMedia.kind === "video" ? "video" : "audio");
+      element.volume = settings.volume;
       element.preload = "auto";
       element.src = sourceMedia.url;
       mediaRef.current = element;
       setActiveSentenceId(sentence.id);
       setActiveWordIndex(0);
       setActivePhraseText(sentence.text);
-      setSpeechStatus(`Playing sentence from original ${sourceMedia.kind}.`);
+      setSpeechStatus(`Playing sentence from ${sourceMode} ${sourceMedia.kind}.`);
 
       const startSeconds = Math.max(0, sentence.startMs / 1000);
       const endSeconds = Math.max(startSeconds, sentence.endMs / 1000);
@@ -427,27 +432,53 @@ export function useSubtitleSpeech(
       };
 
       element.onplay = () => {
+        if (speechRunRef.current !== runId || mediaRef.current !== element) return;
         setIsSpeaking(true);
         wordFrameRef.current = window.requestAnimationFrame(tick);
       };
       element.onpause = () => {
-        if (element.currentTime >= endSeconds || speechRunRef.current !== runId) {
+        if (element.currentTime >= endSeconds && speechRunRef.current === runId) {
           resetActiveSpeech();
         }
       };
+      element.onended = () => {
+        if (speechRunRef.current === runId) resetActiveSpeech();
+      };
       element.onerror = () => {
+        if (speechRunRef.current !== runId) return;
         resetActiveSpeech();
         setSpeechStatus("Original audio playback failed.");
       };
       element.onloadedmetadata = () => {
-        element.currentTime = startSeconds;
-        void element.play().catch(() => {
-          resetActiveSpeech();
-          setSpeechStatus("Original audio playback failed.");
-        });
+        void (async () => {
+          try {
+            if (speechRunRef.current !== runId) return;
+            if (startSeconds > 0) {
+              await new Promise<void>((resolve, reject) => {
+                const cleanUp = () => {
+                  element.removeEventListener("seeked", onSeeked);
+                  element.removeEventListener("error", onError);
+                };
+                const onSeeked = () => { cleanUp(); resolve(); };
+                const onError = () => { cleanUp(); reject(new Error("Unable to seek recorded audio.")); };
+                element.addEventListener("seeked", onSeeked, { once: true });
+                element.addEventListener("error", onError, { once: true });
+                element.currentTime = startSeconds;
+                if (!element.seeking && Math.abs(element.currentTime - startSeconds) < 0.01) onSeeked();
+              });
+            }
+            if (sourceMode === "normalized") await connectNormalizedSourceMedia(element);
+            if (speechRunRef.current !== runId) return;
+            await element.play();
+          } catch {
+            if (speechRunRef.current !== runId) return;
+            resetActiveSpeech();
+            setSpeechStatus("Recorded audio playback failed.");
+          }
+        })();
       };
     },
-    [resetActiveSpeech]
+    [connectNormalizedSourceMedia, resetActiveSpeech, settings.volume]
   );
 
   const speakSentenceWithWebSpeech = useCallback(
@@ -462,6 +493,7 @@ export function useSubtitleSpeech(
       utterance.pitch = settings.pitch;
       utterance.volume = settings.volume;
       utterance.onstart = () => {
+        if (speechRunRef.current !== runId) return;
         setActiveSentenceId(sentence.id);
         setActiveWordIndex(0);
         setActivePhraseText(sentence.text);
@@ -479,8 +511,11 @@ export function useSubtitleSpeech(
           setActiveWordIndex(boundaryIndex);
         }
       };
-      utterance.onend = () => resetActiveSpeech();
+      utterance.onend = () => {
+        if (speechRunRef.current === runId) resetActiveSpeech();
+      };
       utterance.onerror = () => {
+        if (speechRunRef.current !== runId) return;
         resetActiveSpeech();
         setSpeechStatus("Browser speech synthesis failed.");
       };
@@ -516,6 +551,7 @@ export function useSubtitleSpeech(
         const url = URL.createObjectURL(blob);
         mediaUrlRef.current = url;
         const audio = new Audio(url);
+        audio.volume = settings.volume;
         mediaRef.current = audio;
         const wordWeights = sentence.words.map((word) => Math.max(1, word.text.trim().length));
         const totalWeight = wordWeights.reduce((sum, value) => sum + value, 0);
@@ -554,11 +590,11 @@ export function useSubtitleSpeech(
         setSpeechStatus(error instanceof Error ? error.message : "Supertonic speech synthesis failed.");
       }
     },
-    [resetActiveSpeech, selectedVoiceId]
+    [resetActiveSpeech, selectedVoiceId, settings.volume]
   );
 
   const playSentence = useCallback(
-    (sentence: TranscriptSentence, sourceMedia: SourceMediaPlayback | null, mode: RuntimeTtsSettings["sentencePlaybackMode"]) => {
+    (sentence: TranscriptSentence, sourceMedia: SourceMediaPlayback | null, mode: RuntimeTtsSettings["sentencePlaybackMode"], sourceMode: SourceMediaPlaybackMode = "original") => {
       if (activeSentenceId === sentence.id && isSpeaking) {
         stopSpeaking();
         return;
@@ -566,8 +602,12 @@ export function useSubtitleSpeech(
 
       stopSpeaking();
       const runId = speechRunRef.current;
-      if (mode === "source-audio" && sourceMedia && sentence.words.length > 0) {
-        playSourceSentence({ sentence, sourceMedia }, runId);
+      if (mode === "source-audio") {
+        if (sourceMedia && sentence.endMs > sentence.startMs) {
+          playSourceSentence({ sentence, sourceMedia, sourceMode }, runId);
+        } else {
+          setSpeechStatus("Original audio is unavailable for this sentence.");
+        }
         return;
       }
 

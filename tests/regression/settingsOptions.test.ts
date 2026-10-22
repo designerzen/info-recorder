@@ -10,13 +10,27 @@ import {
 } from "../../src/config/settingsOptions";
 
 describe("settingsOptions regressions", () => {
+  it("persists translation languages and ignores invalid language codes", () => {
+    const settings = readSettingsFromUrl("?translationSource=es&translationTarget=de");
+    expect(settings.translation).toEqual({ sourceLanguage: "es", targetLanguage: "de" });
+    const clone = cloneRuntimeSettings(settings);
+    clone.translation.targetLanguage = "fr";
+    expect(settings.translation.targetLanguage).toBe("de");
+    encodeSettingsInUrl(settings);
+    expect(window.location.search).toContain("translationSource=es");
+    expect(window.location.search).toContain("translationTarget=de");
+    expect(readSettingsFromUrl("?translationSource=invalid").translation.sourceLanguage).toBe("en");
+  });
+
   it("deep-clones nested settings objects", () => {
     const clone = cloneRuntimeSettings(defaultRuntimeSettings);
     clone.vad.ml.speechLabels.push("narration");
+    clone.vad.silero.threshold = 0.2;
     clone.tts.supertonic.voices[0].name = "Changed";
     clone.pageStyle.textColor = "#123456";
 
     expect(defaultRuntimeSettings.vad.ml.speechLabels).not.toContain("narration");
+    expect(defaultRuntimeSettings.vad.silero.threshold).not.toBe(0.2);
     expect(defaultRuntimeSettings.tts.supertonic.voices[0]?.name).not.toBe("Changed");
     expect(defaultRuntimeSettings.pageStyle.textColor).not.toBe("#123456");
   });
@@ -58,8 +72,16 @@ describe("settingsOptions regressions", () => {
     expect(String(nextUrl)).toContain("pageStyle=");
   });
 
-  it("defaults to timestamped whisper small english and exposes timestamp-capable ONNX and WASM models", () => {
-    expect(defaultRuntimeSettings.transcription.modelId).toBe("onnx-community/whisper-small.en_timestamped");
+  it("round-trips the Silero VAD mode through URL settings", () => {
+    const settings = readSettingsFromUrl("?activityDetection=1&vad=silero-vad&sileroSpeechThreshold=0.65");
+
+    expect(settings.vad.enabled).toBe(true);
+    expect(settings.vad.mode).toBe("silero-vad");
+    expect(settings.vad.silero.threshold).toBe(0.65);
+  });
+
+  it("defaults to Moonshine Small Streaming and keeps timestamp-capable Whisper choices", () => {
+    expect(defaultRuntimeSettings.transcription.modelId).toBe("moonshine:small-streaming-en");
     expect(defaultRuntimeSettings.vad.enabled).toBe(false);
 
     const modelOption = settingsOptions.find((option) => option.key === "transcriptionModel");
@@ -69,6 +91,9 @@ describe("settingsOptions regressions", () => {
     }
 
     expect(modelOption.options.map((item) => item.value)).toEqual([
+      "moonshine:tiny-streaming-en",
+      "moonshine:small-streaming-en",
+      "moonshine:medium-streaming-en",
       "onnx-community/whisper-tiny.en_timestamped",
       "onnx-community/whisper-base.en_timestamped",
       "onnx-community/whisper-small.en_timestamped",
@@ -94,6 +119,9 @@ describe("settingsOptions regressions", () => {
       "wasm:medium-q5_0",
       "wasm:large-q5_0"
     ]);
+    const moonshineModel = modelOption.options.find((item) => item.value === "moonshine:small-streaming-en");
+    expect(moonshineModel?.label).toContain("Moonshine WASM");
+    expect(moonshineModel?.label).toContain("Word timestamps");
     const wasmModel = modelOption.options.find((item) => item.value === "wasm:base.en-q5_1");
     expect(wasmModel?.label).toContain("WASM GGML");
     expect(wasmModel?.label).toContain("Segment timestamps");
@@ -107,6 +135,10 @@ describe("settingsOptions regressions", () => {
 
     settings.vad.mode = "rms-zcr";
     expect(getRealtimeSilenceRms(settings)).toBe(settings.vad.rmsZcr.minRms);
+
+    settings.vad.mode = "silero-vad";
+    settings.vad.silero.fallbackMode = "fixed-rms";
+    expect(getRealtimeSilenceRms(settings)).toBe(settings.vad.fixedRms.threshold);
 
     settings.vad.mode = "transformers-audio-classification";
     settings.vad.ml.fallbackMode = "rms-zcr";

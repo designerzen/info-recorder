@@ -18,6 +18,7 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@huggingface/transformers": "^4.2.0",
+    "@moonshine-ai/moonshine-wasm": "https://github.com/moonshine-ai/moonshine/releases/download/v0.1.0/moonshine-voice-wasm.tar.gz",
     "@timur00kh/whisper.wasm": "0.1.1",
     "@vitejs/plugin-react": "^6.0.3",
     "fft.js": "^4.0.4",

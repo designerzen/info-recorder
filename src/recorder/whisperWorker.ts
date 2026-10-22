@@ -1,5 +1,13 @@
 import { env, ModelRegistry, pipeline } from "@huggingface/transformers";
 import { ModelManager, WhisperWasmService, getAllModels } from "@timur00kh/whisper.wasm";
+import {
+  ModelArch,
+  Stream as MoonshineStream,
+  Transcriber as MoonshineTranscriber,
+  TranscribeFlags,
+  type Transcript as MoonshineTranscript,
+  type TranscriptLine as MoonshineTranscriptLine
+} from "@moonshine-ai/moonshine-wasm";
 import type {
   AllTasks,
   AutomaticSpeechRecognitionOutput,
@@ -7,8 +15,10 @@ import type {
 import {
   appSettings,
   getWasmWhisperModelId,
+  isMoonshineModelId,
   isWasmTranscriptionModelId,
   type AppSettings,
+  type MoonshineModelId,
   type WasmWhisperModelId
 } from "../config/settings";
 import {
@@ -24,7 +34,7 @@ import { createTransformersOpfsCache } from "./transformersOpfsCache";
 
 type AutomaticSpeechRecognitionPipelineType = AllTasks["automatic-speech-recognition"];
 type AudioSamples = Float32Array<ArrayBuffer>;
-type LoadedModel = AutomaticSpeechRecognitionPipelineType | WhisperWasmService;
+type LoadedModel = AutomaticSpeechRecognitionPipelineType | WhisperWasmService | MoonshineTranscriber;
 
 type InboundMessage =
   | { type: "configure"; transcription: AppSettings["transcription"] }
@@ -48,6 +58,16 @@ const WHISPER_CONTEXT_SECONDS = 30;
 const WHISPER_STRIDE_SECONDS = 5;
 const SHORT_AUDIO_DIRECT_SECONDS = 12;
 const TRANSCRIPTION_TIMEOUT_MS = 180_000;
+const MOONSHINE_CACHE_NAME = "moonshine-models-v1";
+const MOONSHINE_STREAMING_FILES = [
+  "frontend.ort",
+  "encoder.ort",
+  "adapter.ort",
+  "cross_kv.ort",
+  "decoder_kv.ort",
+  "streaming_config.json",
+  "tokenizer.bin"
+] as const;
 const PIPELINE_OPTIONS = {
   dtype: {
     encoder_model: "fp32",
@@ -65,6 +85,12 @@ env.cacheKey = CACHE_NAME;
 
 let transcriber: AutomaticSpeechRecognitionPipelineType | null = null;
 let wasmTranscriber: WhisperWasmService | null = null;
+let moonshineTranscriber: MoonshineTranscriber | null = null;
+let moonshineStream: MoonshineStream | null = null;
+let moonshineStreamBaseOffsetSeconds = 0;
+let moonshineStreamEndSeconds = 0;
+let moonshineStartsNewParagraph = false;
+const emittedMoonshineLineIds = new Set<number>();
 let loadingPromise: Promise<LoadedModel> | null = null;
 let queue = Promise.resolve();
 let overallProgress = 0;
@@ -107,7 +133,10 @@ self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
 
   if (data.type === "flush") {
     queue = queue
-      .then(() => {
+      .then(async () => {
+        if (moonshineStream) {
+          await finalizeMoonshineStream();
+        }
         postMessage({ type: "partial", text: "" });
         postMessage({ type: "idle" });
       })
@@ -121,6 +150,10 @@ self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
 };
 
 async function load() {
+  if (isMoonshineModelId(transcriptionSettings.modelId)) {
+    return loadMoonshineModel();
+  }
+
   if (isWasmTranscriptionModelId(transcriptionSettings.modelId)) {
     return loadWasmModel();
   }
@@ -148,6 +181,63 @@ async function load() {
   await postCacheStatus();
   postMessage({ type: "ready" });
   return transcriber;
+}
+
+async function loadMoonshineModel() {
+  if (typeof WebAssembly !== "object") {
+    throw new Error("WebAssembly is required. Update your browser or enable WebAssembly.");
+  }
+  if (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer !== "function") {
+    throw new Error("Moonshine requires cross-origin isolation. Serve the app with COOP and COEP headers enabled.");
+  }
+
+  const modelId = transcriptionSettings.modelId;
+  if (!isMoonshineModelId(modelId)) {
+    throw new Error("The selected model is not a Moonshine model.");
+  }
+
+  if (!loadingPromise) {
+    const status = await inspectMoonshineCacheStatus(modelId);
+    overallProgress = status.cached ? 100 : 0;
+    resetDownloadRateTracking();
+    postCacheStatusMessage(status);
+    const fileProgress = new Map<string, { loaded: number; total: number }>();
+
+    loadingPromise = MoonshineTranscriber.load({
+      language: "en",
+      modelArch: getMoonshineArch(modelId),
+      onProgress: (loaded, total, file) => {
+        fileProgress.set(file, { loaded, total: total ?? loaded });
+        const completedFiles = [...fileProgress.values()].filter(
+          (entry) => entry.total > 0 && entry.loaded >= entry.total
+        ).length;
+        const current = fileProgress.get(file);
+        const currentFraction = current && current.total > 0 ? Math.min(1, current.loaded / current.total) : 0;
+        overallProgress = clampProgress(
+          ((Math.max(0, completedFiles - (currentFraction >= 1 ? 1 : 0)) + currentFraction) /
+            MOONSHINE_STREAMING_FILES.length) *
+            100
+        );
+        const loadedBytes = [...fileProgress.values()].reduce((sum, entry) => sum + entry.loaded, 0);
+        const totalBytes = [...fileProgress.values()].reduce((sum, entry) => sum + entry.total, 0);
+        updateMoonshineDownloadRate(loadedBytes);
+        postMessage({
+          type: "progress",
+          message: `Downloading Moonshine model (${file})...`,
+          progress: overallProgress,
+          loadedBytes,
+          totalBytes,
+          bytesPerSecond: smoothedBytesPerSecond
+        });
+      }
+    });
+  }
+
+  moonshineTranscriber = (await loadingPromise) as MoonshineTranscriber;
+  overallProgress = 100;
+  await postCacheStatus();
+  postMessage({ type: "ready" });
+  return moonshineTranscriber;
 }
 
 async function loadWasmModel() {
@@ -193,6 +283,11 @@ async function loadWasmModel() {
 }
 
 async function transcribe(message: Extract<InboundMessage, { type: "transcribe" }>) {
+  if (isMoonshineModelId(transcriptionSettings.modelId)) {
+    await transcribeWithMoonshine(message);
+    return;
+  }
+
   if (isWasmTranscriptionModelId(transcriptionSettings.modelId)) {
     await transcribeWithWasm(message);
     return;
@@ -220,6 +315,98 @@ async function transcribe(message: Extract<InboundMessage, { type: "transcribe" 
   const text = segments.map((item) => item.text).join(" ").trim();
   const words = segments.flatMap((item) => toTranscriptWords(item, message.offsetSeconds));
   postMessage({ type: "segment", text, startsNewParagraph: message.startsNewParagraph, words });
+}
+
+async function transcribeWithMoonshine(message: Extract<InboundMessage, { type: "transcribe" }>) {
+  const recognizer = (moonshineTranscriber ?? (await load())) as MoonshineTranscriber;
+  const audio = message.sampleRate === 16000
+    ? message.audio
+    : resampleLinear(message.audio, message.sampleRate, 16000);
+
+  if (!moonshineStream) {
+    moonshineStream = recognizer.createStream();
+    moonshineStream.addListener({
+      onLineCompleted: ({ line }) => emitMoonshineLine(line)
+    });
+    moonshineStream.start();
+    moonshineStreamBaseOffsetSeconds = message.offsetSeconds;
+    moonshineStreamEndSeconds = message.offsetSeconds;
+    emittedMoonshineLineIds.clear();
+  }
+
+  moonshineStartsNewParagraph ||= message.startsNewParagraph;
+  if (message.offsetSeconds > moonshineStreamEndSeconds) {
+    const gapSamples = Math.round((message.offsetSeconds - moonshineStreamEndSeconds) * 16000);
+    if (gapSamples > 0) moonshineStream.addAudio(new Float32Array(gapSamples), 16000);
+  }
+  const overlapSamples = Math.max(
+    0,
+    Math.min(audio.length, Math.round((moonshineStreamEndSeconds - message.offsetSeconds) * 16000))
+  );
+  const freshAudio = overlapSamples > 0 ? audio.subarray(overlapSamples) : audio;
+  if (freshAudio.length > 0) moonshineStream.addAudio(freshAudio, 16000);
+  moonshineStreamEndSeconds = Math.max(
+    moonshineStreamEndSeconds,
+    message.offsetSeconds + audio.length / 16000
+  );
+
+  const transcript = moonshineStream.transcribe(
+    message.isFinal ? TranscribeFlags.ForceUpdate : TranscribeFlags.None
+  );
+  emitMoonshineTranscript(transcript);
+  if (message.isFinal) await finalizeMoonshineStream();
+}
+
+function emitMoonshineTranscript(transcript: MoonshineTranscript) {
+  for (const line of transcript.lines) {
+    if (line.isComplete) emitMoonshineLine(line);
+  }
+  const partial = [...transcript.lines].reverse().find((line) => !line.isComplete)?.text.trim() ?? "";
+  postMessage({ type: "partial", text: partial });
+}
+
+function emitMoonshineLine(line: MoonshineTranscriptLine) {
+  if (emittedMoonshineLineIds.has(line.id)) return;
+  emittedMoonshineLineIds.add(line.id);
+  const text = line.text.trim();
+  if (!text) return;
+  postMessage({
+    type: "segment",
+    text,
+    startsNewParagraph: moonshineStartsNewParagraph,
+    words: toMoonshineTranscriptWords({ lines: [line] })
+  });
+  moonshineStartsNewParagraph = false;
+}
+
+async function finalizeMoonshineStream() {
+  const stream = moonshineStream;
+  if (!stream) return;
+  stream.stop();
+  stream.close();
+  moonshineStream = null;
+  moonshineStreamBaseOffsetSeconds = 0;
+  moonshineStreamEndSeconds = 0;
+  moonshineStartsNewParagraph = false;
+  emittedMoonshineLineIds.clear();
+}
+
+function toMoonshineTranscriptWords(transcript: MoonshineTranscript): TranscriptWord[] {
+  return transcript.lines.flatMap((line) => {
+    if (line.words.length > 0) {
+      return line.words.map((word) => ({
+        text: word.text,
+        startMs: Math.max(0, Math.round((moonshineStreamBaseOffsetSeconds + word.start) * 1000)),
+        endMs: Math.max(0, Math.round((moonshineStreamBaseOffsetSeconds + word.end) * 1000))
+      }));
+    }
+    const startMs = Math.max(0, Math.round((moonshineStreamBaseOffsetSeconds + line.startTime) * 1000));
+    return [{
+      text: line.text,
+      startMs,
+      endMs: Math.max(startMs, Math.round((moonshineStreamBaseOffsetSeconds + line.startTime + line.duration) * 1000))
+    }];
+  });
 }
 
 async function transcribeWithWasm(message: Extract<InboundMessage, { type: "transcribe" }>) {
@@ -331,16 +518,25 @@ function reportError(cause: unknown) {
 
 async function postCacheStatus() {
   try {
-    const status = isWasmTranscriptionModelId(transcriptionSettings.modelId)
-      ? await inspectWasmCacheStatus(getSelectedWasmModelId())
-      : await inspectCacheStatus();
+    const modelId = transcriptionSettings.modelId;
+    if (isMoonshineModelId(modelId)) {
+      const status = await inspectMoonshineCacheStatus(modelId);
+      overallProgress = status.cached ? 100 : 0;
+      postCacheStatusMessage(status);
+      return;
+    }
+    if (isWasmTranscriptionModelId(modelId)) {
+      const status = await inspectWasmCacheStatus(getSelectedWasmModelId());
+      overallProgress = status.cached ? 100 : 0;
+      postCacheStatusMessage(status);
+      return;
+    }
+    const status = await inspectCacheStatus();
     if (status.cached) {
       overallProgress = 100;
-    } else if (!isWasmTranscriptionModelId(transcriptionSettings.modelId)) {
+    } else {
       downloadTracker = await prepareDownloadTracker(status);
       overallProgress = downloadTracker?.getProgress() ?? 0;
-    } else {
-      overallProgress = 0;
     }
     postCacheStatusMessage(status);
   } catch (cause) {
@@ -353,6 +549,32 @@ async function postCacheStatus() {
       message
     });
   }
+}
+
+async function inspectMoonshineCacheStatus(modelId: MoonshineModelId) {
+  const totalFiles = MOONSHINE_STREAMING_FILES.length;
+  if (!("caches" in globalThis)) {
+    return { cached: false, cachedFiles: 0, totalFiles, files: [], cachedBytes: 0 };
+  }
+  const cache = await caches.open(MOONSHINE_CACHE_NAME);
+  const requests = await cache.keys();
+  const slug = modelId.slice("moonshine:".length);
+  const cachedFiles = MOONSHINE_STREAMING_FILES.filter((file) =>
+    requests.some((request) => request.url.includes(`/${slug}/`) && new URL(request.url).pathname.endsWith(`/${file}`))
+  ).length;
+  return {
+    cached: cachedFiles === totalFiles,
+    cachedFiles,
+    totalFiles,
+    files: [],
+    cachedBytes: 0
+  };
+}
+
+function getMoonshineArch(modelId: MoonshineModelId) {
+  if (modelId === "moonshine:tiny-streaming-en") return ModelArch.TinyStreaming;
+  if (modelId === "moonshine:medium-streaming-en") return ModelArch.MediumStreaming;
+  return ModelArch.SmallStreaming;
 }
 
 function formatWorkerError(cause: unknown, fallback: string) {
@@ -528,6 +750,10 @@ function applyTranscriptionSettings(nextSettings: AppSettings["transcription"]) 
   transcriptionSettings = { ...nextSettings };
   transcriber = null;
   wasmTranscriber = null;
+  moonshineStream?.close();
+  moonshineStream = null;
+  moonshineTranscriber?.close();
+  moonshineTranscriber = null;
   loadingPromise = null;
   downloadTracker = null;
   overallProgress = 0;
@@ -634,6 +860,18 @@ function fetchWithXhr(request: Request) {
 }
 
 async function inspectModelInventory(modelId: AppSettings["transcription"]["modelId"]): Promise<ModelInventoryEntry> {
+  if (isMoonshineModelId(modelId)) {
+    const status = await inspectMoonshineCacheStatus(modelId);
+    return {
+      modelId,
+      cached: status.cached,
+      cachedFiles: status.cachedFiles,
+      totalFiles: status.totalFiles,
+      sizeBytes: 0,
+      cachedBytes: status.cachedBytes
+    };
+  }
+
   if (isWasmTranscriptionModelId(modelId)) {
     const status = await inspectWasmCacheStatus(getWasmWhisperModelId(modelId));
     return {
@@ -735,6 +973,22 @@ function updateDownloadRateTracking() {
     }
   }
 
+  lastTrackedLoadedBytes = loadedBytes;
+  lastTrackedProgressAt = now;
+}
+
+function updateMoonshineDownloadRate(loadedBytes: number) {
+  const now = performance.now();
+  if (lastTrackedProgressAt > 0 && now > lastTrackedProgressAt && loadedBytes >= lastTrackedLoadedBytes) {
+    const elapsedSeconds = (now - lastTrackedProgressAt) / 1000;
+    const deltaBytes = loadedBytes - lastTrackedLoadedBytes;
+    if (elapsedSeconds > 0 && deltaBytes > 0) {
+      const instantBytesPerSecond = deltaBytes / elapsedSeconds;
+      smoothedBytesPerSecond = smoothedBytesPerSecond > 0
+        ? smoothedBytesPerSecond * 0.7 + instantBytesPerSecond * 0.3
+        : instantBytesPerSecond;
+    }
+  }
   lastTrackedLoadedBytes = loadedBytes;
   lastTrackedProgressAt = now;
 }

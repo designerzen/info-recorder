@@ -1,5 +1,7 @@
+import { TranslationSettings } from "./components/TranslationSettings";
+import { useBrowserTranslation } from "./translation/useBrowserTranslation";
 import { createRoot } from "react-dom/client";
-import { Circle, Pause, Play, SlidersHorizontal, Square, Upload } from "lucide-react";
+import { Circle, FileText, Map, Pause, Play, SlidersHorizontal, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import "./styles.css";
@@ -22,7 +24,8 @@ import { getTypefaceAssFamily } from "./config/typefaces";
 import { useTranscriber } from "./recorder/useTranscriber";
 import { useSubtitleSpeech } from "./speech/useSubtitleSpeech";
 import { useJassubSubtitles } from "./subtitles/useJassubSubtitles";
-import { splitParagraphIntoSentences } from "./transcript/timedTranscript";
+import { splitParagraphIntoSentences, type TranscriptSentence } from "./transcript/timedTranscript";
+import { locateTranscriptSentences } from "./transcript/locatedTranscript";
 
 type TranscriptPlaybackChoice = "source:original" | "source:normalized" | `web:${string}` | `model:${string}`;
 
@@ -31,6 +34,9 @@ function App() {
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
+  const [workspaceView, setWorkspaceView] = useState<"transcript" | "map">("transcript");
+  const [playbackError, setPlaybackError] = useState("");
+  const playbackRequestRef = useRef(0);
   const [transcriptPlaybackChoice, setTranscriptPlaybackChoice] =
     useState<TranscriptPlaybackChoice>("source:normalized");
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
@@ -94,42 +100,33 @@ function App() {
   );
   const locatedPhraseMessages = useMemo<PhraseLocationMapMessage[]>(() => {
     const sentences = transcriptParagraphs.flatMap((paragraph) => paragraph.sentences);
-    return recorder.audioParts
-      .filter((part) => typeof part.LAT === "number" && typeof part.LONG === "number")
-      .map((part) => ({
-        id: part.name,
-        sequence: part.sequence,
-        text: sentences[part.sequence]?.text || part.name,
-        LAT: part.LAT as number,
-        LONG: part.LONG as number,
-        startIso: part.startIso
-      }));
-  }, [recorder.audioParts, transcriptParagraphs]);
+    return locateTranscriptSentences(sentences, recorder.audioParts, recorder.recordingStartedAt);
+  }, [recorder.audioParts, recorder.recordingStartedAt, transcriptParagraphs]);
   const transcriptSentences = useMemo(
     () => transcriptParagraphs.flatMap((paragraph) => paragraph.sentences),
     [transcriptParagraphs]
   );
+  const translation = useBrowserTranslation(transcriptSentences, settings.translation.sourceLanguage, settings.translation.targetLanguage);
   const speech = useSubtitleSpeech(transcriptText, transcriptSentences, settings.tts, updateTtsSettings);
   const showSubtitleOverlay = speech.isSpeaking;
   const playbackText = transcriptBlocks.join("\n").trim();
+  const hasSourceAudio = Boolean(recorder.sourceMedia || recorder.opfsChunkCount > 0);
   const transcriptPlaybackOptions = useMemo(
     () => [
       {
         group: "Audio",
         items: [
           {
-            description: recorder.sourceMedia
-              ? `Play the uploaded ${recorder.sourceMedia.kind} exactly as recorded.`
-              : "Only available after transcribing uploaded media.",
-            disabled: !recorder.sourceMedia,
+            description: hasSourceAudio ? "Play the original recording." : "No recorded audio available.",
+            disabled: !hasSourceAudio,
             icon: "◎",
             label: "Original Audio",
             value: "source:original" as TranscriptPlaybackChoice
           },
           {
-            description: recorder.sourceMedia
-              ? `Play the uploaded ${recorder.sourceMedia.kind} with light voice-focused normalization.`
-              : "Uses the selected speech engine until uploaded source audio is available.",
+            description: hasSourceAudio
+              ? "Play recorded audio with voice-focused normalization."
+              : "Read the transcription using the selected speech engine.",
             disabled: false,
             icon: "◉",
             label: "Normalised Audio",
@@ -158,14 +155,14 @@ function App() {
         }))
       }
     ],
-    [recorder.sourceMedia, speech.browserVoiceOptions, speech.modelVoiceOptions]
+    [hasSourceAudio, speech.browserVoiceOptions, speech.modelVoiceOptions]
   );
   const selectedTranscriptPlaybackOption = transcriptPlaybackOptions
     .flatMap((group) => group.items)
     .find((item) => item.value === transcriptPlaybackChoice);
   const sentencePlaybackMode: RuntimeTtsSettings["sentencePlaybackMode"] =
-    transcriptPlaybackChoice === "source:original" ? "source-audio" : "tts";
-  const isSentencePlaybackUnavailable = sentencePlaybackMode === "source-audio" && !recorder.sourceMedia;
+    transcriptPlaybackChoice.startsWith("source:") && hasSourceAudio ? "source-audio" : "tts";
+  const isSentencePlaybackUnavailable = sentencePlaybackMode === "tts" && !speech.isSpeechSupported;
   const subtitleText = speech.isSpeaking ? speech.activePhraseText || transcriptText : "";
   const setSubtitleCanvas = useJassubSubtitles(subtitleText, settings.subtitles);
   const isBusyTranscribingMedia = recorder.isTranscribingMedia;
@@ -255,10 +252,10 @@ function App() {
   }, [recorder?.isRecording]);
 
   useEffect(() => {
-    if (transcriptPlaybackChoice === "source:original" && !recorder.sourceMedia) {
+    if (transcriptPlaybackChoice === "source:original" && !hasSourceAudio) {
       setTranscriptPlaybackChoice("source:normalized");
     }
-  }, [recorder.sourceMedia, transcriptPlaybackChoice]);
+  }, [hasSourceAudio, transcriptPlaybackChoice]);
 
   const handleTranscriptPlaybackChoice = useCallback(
     (value: TranscriptPlaybackChoice) => {
@@ -282,34 +279,38 @@ function App() {
     [updateTtsSettings]
   );
 
+  const playPassage = useCallback(async (sentence?: TranscriptSentence) => {
+    const request = ++playbackRequestRef.current;
+    setPlaybackError("");
+    speech.stopSpeaking();
+    try {
+      if (sentencePlaybackMode === "source-audio") {
+        const source = recorder.sourceMedia ?? await recorder.getRecordingSourceMedia();
+        if (request !== playbackRequestRef.current) return;
+        if (!source) throw new Error("Recorded audio is unavailable for this transcription.");
+        const mode = transcriptPlaybackChoice === "source:normalized" ? "normalized" : "original";
+        if (sentence) speech.playSentence(sentence, source, "source-audio", mode);
+        else await speech.playSourceMedia(source, mode, { sentences: transcriptSentences });
+      } else if (sentence) {
+        speech.playSentence(sentence, null, "tts");
+      } else {
+        speech.speakText(playbackText);
+      }
+    } catch (cause) {
+      if (request === playbackRequestRef.current) {
+        setPlaybackError(cause instanceof Error ? cause.message : "Playback failed.");
+      }
+    }
+  }, [playbackText, recorder.sourceMedia, recorder.getRecordingSourceMedia, sentencePlaybackMode, speech, transcriptPlaybackChoice, transcriptSentences]);
+
   const playTranscript = useCallback(() => {
     if (speech.isSpeaking) {
+      playbackRequestRef.current += 1;
       speech.stopSpeaking();
       return;
     }
-
-    if (transcriptPlaybackChoice === "source:original") {
-      speech.playSourceMedia(
-        recorder.sourceMedia
-          ? { url: recorder.sourceMedia.url, kind: recorder.sourceMedia.kind }
-          : null,
-        "original",
-        { sentences: transcriptSentences }
-      );
-      return;
-    }
-
-    if (transcriptPlaybackChoice === "source:normalized" && recorder.sourceMedia) {
-      speech.playSourceMedia(
-        { url: recorder.sourceMedia.url, kind: recorder.sourceMedia.kind },
-        "normalized",
-        { sentences: transcriptSentences }
-      );
-      return;
-    }
-
-    speech.speakText(playbackText);
-  }, [playbackText, recorder.sourceMedia, speech, transcriptPlaybackChoice, transcriptSentences]);
+    void playPassage();
+  }, [playPassage, speech]);
 
   useEffect(() => {
     const container = transcriptRef.current;
@@ -326,7 +327,7 @@ function App() {
     if (!shouldFollow) return;
 
     transcriptEndRef.current?.scrollIntoView({ block: "end" });
-  }, [isAutoScrollEnabled, transcriptBlocks]);
+  }, [isAutoScrollEnabled, transcriptBlocks, workspaceView]);
 
   return (
     <main className="app-shell" data-recording={recorder.isRecording}>
@@ -340,6 +341,7 @@ function App() {
       />
       <TranscriptionSupportDialog
         isOpen={!recorder.isTranscriptionSupported}
+        requiresCrossOriginIsolation={recorder.requiresCrossOriginIsolation}
         requiresWebGpu={recorder.requiresWebGpu}
         support={recorder.runtimeSupport}
       />
@@ -357,7 +359,8 @@ function App() {
         settings={settings}
         voiceOptions={speech.voiceOptions}
         onClose={() => setIsSettingsOpen(false)}
-        onReset={resetSettings}
+        translationControls={<TranslationSettings settings={settings} translation={translation} onUpdate={updateSettings} />}
+        onReset={() => { translation.disable(); resetSettings(); }}
         onSetPageStyle={setPageStyle}
         onSetMicrophone={setMicrophone}
         onSetVoice={speech.setSelectedVoiceId}
@@ -417,7 +420,31 @@ function App() {
         </header>
 
         <section className="workspace-shell" aria-label="Transcript workspace">
-          <section ref={transcriptRef} className="transcript" aria-label={aria.transcript}>
+          <div className="workspace-tabs" role="tablist" aria-label="Workspace view">
+            {(["transcript", "map"] as const).map((view) => (
+              <button
+                key={view}
+                id={`${view}-tab`}
+                type="button"
+                role="tab"
+                aria-selected={workspaceView === view}
+                aria-controls={`${view}-panel`}
+                tabIndex={workspaceView === view ? 0 : -1}
+                onClick={() => setWorkspaceView(view)}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  const next = event.key === "Home" ? "transcript" : event.key === "End" ? "map" : view === "map" ? "transcript" : "map";
+                  setWorkspaceView(next);
+                  document.getElementById(`${next}-tab`)?.focus();
+                }}
+              >
+                {view === "map" ? <Map size={18} /> : <FileText size={18} />}
+                {view === "map" ? "Map" : "Transcript"}
+              </button>
+            ))}
+          </div>
+          <section ref={transcriptRef} id="transcript-panel" role="tabpanel" aria-labelledby="transcript-tab" hidden={workspaceView !== "transcript"} className="transcript" aria-label={aria.transcript}>
             <div className="transcript-body">
               {transcriptBlocks.length > 0 ? (
                 <>
@@ -435,25 +462,15 @@ function App() {
                       {index < transcriptParagraphs.length ? (
                         transcriptParagraphs[index].sentences.map((sentence) => {
                           return (
+                            <span key={sentence.id} className="translated-sentence">
                             <button
-                              key={sentence.id}
                               type="button"
                               className={`sentence-button${speech.activeSentenceId === sentence.id ? " active" : ""}`}
-                              onClick={() =>
-                                speech.playSentence(
-                                  sentence,
-                                  recorder.sourceMedia
-                                    ? { url: recorder.sourceMedia.url, kind: recorder.sourceMedia.kind }
-                                    : null,
-                                  sentencePlaybackMode
-                                )
-                              }
+                              onClick={() => void playPassage(sentence)}
                               disabled={isSentencePlaybackUnavailable}
                               title={
                                 sentencePlaybackMode === "source-audio"
-                                  ? recorder.sourceMedia
-                                    ? `Play from ${recorder.sourceMedia.fileName}`
-                                    : "Original source audio is only available for uploaded media."
+                                  ? "Play this sentence from the recording"
                                   : `Read this sentence aloud as ${selectedTranscriptPlaybackOption?.label ?? "the selected voice"}.`
                               }
                             >
@@ -472,6 +489,12 @@ function App() {
                                   ))
                                 : sentence.text}
                             </button>
+                            {translation.enabled && translation.translations[sentence.id]?.source === sentence.text ? (
+                              <span className="sentence-translation" lang={settings.translation.targetLanguage} dir="auto">
+                                {translation.translations[sentence.id].text}
+                              </span>
+                            ) : null}
+                            </span>
                           );
                         })
                       ) : (
@@ -500,6 +523,7 @@ function App() {
               </div>
             ) : null}
             {!isBusyTranscribingMedia && recorder.progress ? <p className="progress">{recorder.progress}</p> : null}
+            {translation.status && (translation.enabled || translation.loading) ? <p className="progress" role="status">{translation.status}</p> : null}
             {recorder.error ? (
               <p className="error" role="alert">
                 {recorder.error}
@@ -507,13 +531,26 @@ function App() {
             ) : null}
           </section>
 
-          {locatedPhraseMessages.length > 0 ? (
-            <PhraseLocationMap messages={locatedPhraseMessages} />
-          ) : (
-            <p className="location-unknown" role="status">
-              Location unknown for this transcription
-            </p>
-          )}
+          <section id="map-panel" role="tabpanel" aria-labelledby="map-tab" hidden={workspaceView !== "map"}>
+            {workspaceView === "map" && (locatedPhraseMessages.length > 0 ? (
+              <PhraseLocationMap
+                messages={locatedPhraseMessages}
+                onPlay={(message) => void playPassage(message)}
+                activeMessageId={speech.activeSentenceId}
+                isPlaying={speech.isSpeaking}
+                playbackLabel={selectedTranscriptPlaybackOption?.label ?? "Selected voice"}
+                playbackUnavailable={isSentencePlaybackUnavailable}
+                onStop={() => { playbackRequestRef.current += 1; speech.stopSpeaking(); }}
+              />
+            ) : (
+              <p className="location-unknown" role="status">
+                Location unknown for this transcription
+              </p>
+            ))}
+          </section>
+
+          {playbackError ? <p role="alert" className="error">{playbackError}</p> : null}
+          {speech.speechStatus ? <p role="status" className="playback-status">{speech.speechStatus}</p> : null}
 
           <div className="scroll-gadget" aria-label="Transcript controls">
             {!isBusyTranscribingMedia && playbackText ? (
@@ -522,9 +559,9 @@ function App() {
                   className="speech-button playback-cta"
                   type="button"
                   onClick={playTranscript}
-                  disabled={!speech.isSpeechSupported && transcriptPlaybackChoice !== "source:original"}
+                  disabled={isSentencePlaybackUnavailable}
                   title={
-                    !speech.isSpeechSupported && transcriptPlaybackChoice !== "source:original"
+                    isSentencePlaybackUnavailable
                       ? "The selected speech engine is not available in this browser."
                       : speech.isSpeaking
                         ? "Stop reading the transcript aloud"
@@ -623,14 +660,17 @@ function App() {
 
 function TranscriptionSupportDialog({
   isOpen,
+  requiresCrossOriginIsolation,
   requiresWebGpu,
   support
 }: {
   isOpen: boolean;
+  requiresCrossOriginIsolation: boolean;
   requiresWebGpu: boolean;
   support: {
     hasWebAssembly: boolean;
     hasWebGpu: boolean;
+    hasCrossOriginIsolation: boolean;
     isSecureContext: boolean;
   };
 }) {
@@ -638,6 +678,7 @@ function TranscriptionSupportDialog({
 
   const missingFeatures = [
     requiresWebGpu && !support.hasWebGpu ? "WebGPU" : "",
+    requiresCrossOriginIsolation && !support.hasCrossOriginIsolation ? "cross-origin isolation" : "",
     !support.hasWebAssembly ? "WebAssembly" : "",
     !support.isSecureContext ? "a secure HTTPS or localhost page" : ""
   ].filter(Boolean);
@@ -656,9 +697,9 @@ function TranscriptionSupportDialog({
           {formatFeatureList(missingFeatures)}.
         </p>
         <p>
-          Update to the latest Chrome, Edge, or another Chromium-based browser with WebGPU enabled,
-          then open the app over HTTPS or localhost. WebAssembly must also be enabled because the
-          local audio and model runtimes use browser WASM modules.
+          Update to the latest Chrome, Edge, or another Chromium-based browser, then open the app
+          over HTTPS or localhost. WebAssembly must be enabled. Whisper ONNX models also require
+          WebGPU; Moonshine requires COOP and COEP response headers for its threaded WASM runtime.
         </p>
       </section>
     </div>

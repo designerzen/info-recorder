@@ -1,8 +1,8 @@
 # Info Recorder
 
-Info Recorder is a browser-only speech recorder and transcription prototype. It records microphone audio into the browser's Origin Private File System (OPFS), draws a live waveform, uses local voice activity detection to split speech into phrase parts, and transcribes speech on screen with Transformers.js and WebGPU.
+Info Recorder is a browser-only speech recorder and transcription prototype. It records microphone audio into the browser's Origin Private File System (OPFS), draws a live waveform, uses local voice activity detection to split speech into phrase parts, and transcribes speech on screen with Moonshine or Whisper.
 
-No microphone audio is sent to an application server. Transcription runs client-side. On first use, the browser downloads the Whisper model files and stores them in persistent origin storage through Transformers.js. Later runs reuse the cached files without downloading them again unless the user clears site data, changes browser profile, changes device, or changes the model/revision.
+No microphone audio is sent to an application server. Transcription runs client-side. On first use, the browser downloads the selected model files and stores them in browser-managed offline storage. Later runs reuse the cached files unless the user clears site data, changes browser profile or device, or changes models.
 
 ## Features
 
@@ -14,14 +14,15 @@ No microphone audio is sent to an application server. Transcription runs client-
 - Live ASS subtitle rendering with JASSUB on a canvas
 - Optional read-aloud of the current subtitle with either built-in Web Speech API voices or Supertonic WebGPU voices loaded from Hugging Face
 - Interchangeable voice activity detection modes for paragraph and part boundaries
-- Client-side Whisper transcription through `@huggingface/transformers`
-- WebGPU-only model execution
-- First-run Whisper model download with persistent offline reuse on later runs
+- Moonshine Tiny, Small, and Medium Streaming English models through the official browser WASM runtime
+- Client-side Whisper through Transformers.js WebGPU or whisper.cpp WASM
+- First-run model download with persistent offline reuse on later runs
 - OPFS playback through an AudioWorklet after decoding stored chunks to PCM
 
 ## Requirements
 
-- A Chromium-based browser with WebGPU enabled
+- A current Chromium-based browser with WebAssembly; Whisper ONNX choices also need WebGPU
+- `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` response headers for Moonshine's threaded WASM build (already configured for Vite dev and preview)
 - Microphone permission
 - OPFS support through `navigator.storage.getDirectory()`
 - AudioWorklet and OffscreenCanvas support for playback and worker-rendered waveform visuals
@@ -42,7 +43,7 @@ http://127.0.0.1:5173/
 ## Usage
 
 1. Leave `Write timestamped MediaRecorder chunks to OPFS` enabled.
-2. Press `Cache Model` once to download and cache Whisper before recording, or let the first `Listen` do it automatically.
+2. Keep the default Moonshine Small Streaming model for live talk, or select another Moonshine/Whisper model in Settings.
 3. Choose the chunk size for OPFS writes.
 4. Press `Listen`.
 5. Speak normally. The waveform scrolls as audio arrives, and text appears as transcription chunks complete.
@@ -52,10 +53,20 @@ http://127.0.0.1:5173/
 
 ## Settings
 
-Application defaults live in [`src/settings.ts`](src/settings.ts). This file controls:
+Settings → Translation offers optional browser translation when the browser exposes
+the built-in `Translator` API. Choose the language of the transcript text and a
+target language, then enable translation. Target choices are checked against the
+browser's availability API; unavailable pairs are excluded. The browser may
+download language packs on first use, then translates text locally. Translations
+appear below the original transcript sentences. Speech recognition and playback
+continue to use the original transcript. Language choices are saved in the URL;
+translation starts disabled and must be enabled again after reloading or changing
+languages. Browsers without this API show an unavailable setting.
+
+Application defaults live in [`src/config/settings.ts`](src/config/settings.ts). This file controls:
 
 - microphone/transcription chunk timings
-- Whisper model, language, task, device, and cache behavior
+- transcription model, language, task, device, and cache behavior
 - VAD mode and detector thresholds
 - optional ML VAD model settings
 - waveform history and scrolling density
@@ -87,9 +98,10 @@ recordings/
 
 ## Implementation Notes
 
-- The app requires WebGPU and passes `device: "webgpu"` to Transformers.js.
-- The default model is `onnx-community/whisper-small.en_timestamped`.
-- Settings expose timestamp-capable Whisper ONNX exports and Whisper WASM GGML models. ONNX models provide word timestamps through `return_timestamps: "word"` chunks; WASM GGML models provide segment start/end timestamps from `@timur00kh/whisper.wasm`.
+- The default model is Moonshine Small Streaming English, selected for its live-speech latency/accuracy balance. Tiny and Medium Streaming are also available.
+- Moonshine runs through the official `moonshine-voice-wasm` v0.1.0 release, caches model assets through the Cache API, and returns word or line timing data through the same transcript path used by Whisper.
+- Settings retain all timestamp-capable Whisper ONNX exports and Whisper WASM GGML models. ONNX models provide word timestamps through `return_timestamps: "word"` chunks; WASM GGML models provide segment start/end timestamps from `@timur00kh/whisper.wasm`.
+- Whisper ONNX selections require WebGPU and pass `device: "webgpu"` to Transformers.js. Moonshine and whisper.cpp choices run in WASM.
 - Current ONNX choices are English-only `tiny/base/small/medium` timestamped, multilingual `tiny/base/small/medium` timestamped, and multilingual `large-v3-turbo` timestamped.
 - Current WASM choices are `tiny/base/small` English and multilingual, Q5 `tiny/base/small` English and multilingual, Q5 `medium` English and multilingual, and Q5 `large` multilingual.
 - Transformers.js uses a custom persistent cache in origin storage, with browser cache fallback when persistent storage APIs are unavailable.

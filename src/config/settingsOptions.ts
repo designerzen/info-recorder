@@ -1,7 +1,9 @@
+import { translationLanguages } from "../translation/browserTranslator";
 import {
   appSettings,
   type AppSettings,
   type RecordingExportFormat,
+  type MoonshineModelId,
   type SentencePlaybackMode,
   type TranscriptionModelId,
   type TtsProvider,
@@ -24,6 +26,7 @@ export type RuntimeTtsSettings = AppSettings["tts"] & {
 };
 
 export type RuntimeSettings = Omit<AppSettings, "tts"> & {
+  translation: { sourceLanguage: string; targetLanguage: string };
   microphone: {
     deviceId: string;
     echoCancellation: boolean;
@@ -49,7 +52,7 @@ export type TranscriptionModelOption = {
   parameters: string;
   downloadSizeBytes?: number;
   languageSupport: "English only" | "Multilingual";
-  runtime: "WebGPU ONNX" | "WASM GGML";
+  runtime: "WebGPU ONNX" | "WASM GGML" | "Moonshine WASM";
   timestampSupport: "Word timestamps" | "Segment timestamps";
   summary: string;
   whyChoose: string;
@@ -89,6 +92,7 @@ export type SettingsOption =
 
 export const defaultRuntimeSettings: RuntimeSettings = {
   ...appSettings,
+  translation: { sourceLanguage: "en", targetLanguage: "fr" },
   audio: { ...appSettings.audio },
   transcription: { ...appSettings.transcription },
   vad: {
@@ -154,6 +158,7 @@ export const recordingExportFormatOptions: SelectOption<RecordingExportFormat>[]
 ];
 
 export const transcriptionModelOptions: TranscriptionModelOption[] = [
+  ...createMoonshineModelOptions(),
   {
     value: "onnx-community/whisper-tiny.en_timestamped",
     label: "Whisper Tiny Timestamped",
@@ -304,11 +309,67 @@ function createWasmModelOptions(): TranscriptionModelOption[] {
   }));
 }
 
+function createMoonshineModelOptions(): TranscriptionModelOption[] {
+  const models: Array<{
+    value: MoonshineModelId;
+    name: string;
+    parameters: string;
+    summary: string;
+    caution?: string;
+  }> = [
+    {
+      value: "moonshine:tiny-streaming-en",
+      name: "Tiny Streaming English",
+      parameters: "34M params",
+      summary: "Lowest-latency Moonshine streaming model for live English speech.",
+      caution: "Fastest option, but less accurate than Small and Medium Streaming."
+    },
+    {
+      value: "moonshine:small-streaming-en",
+      name: "Small Streaming English (Default)",
+      parameters: "123M params",
+      summary: "Default live-speech model, balancing Moonshine's streaming latency and accuracy.",
+    },
+    {
+      value: "moonshine:medium-streaming-en",
+      name: "Medium Streaming English",
+      parameters: "245M params",
+      summary: "Moonshine's highest-accuracy English streaming model.",
+      caution: "Largest Moonshine download and the highest memory use of the streaming choices."
+    }
+  ];
+
+  return models.map((model) => ({
+    value: model.value,
+    label: `Moonshine ${model.name}`,
+    repo: "moonshine-ai/moonshine",
+    parameters: model.parameters,
+    languageSupport: "English only" as const,
+    runtime: "Moonshine WASM" as const,
+    timestampSupport: "Word timestamps" as const,
+    summary: model.summary,
+    whyChoose: "Choose Moonshine for responsive live talk: its streaming models cache prior audio work and avoid Whisper's fixed 30-second input window.",
+    caution: model.caution
+  }));
+}
+
 export function getTranscriptionModelOption(modelId: TranscriptionModelId) {
   return transcriptionModelOptions.find((option) => option.value === modelId) ?? null;
 }
 
 export const settingsOptions: SettingsOption[] = [
+  {
+    key: "translationSource", section: "transcript", label: "Transcript language", kind: "select",
+    options: translationLanguages,
+    getValue: (settings) => settings.translation.sourceLanguage,
+    setValue: (settings, value) => ({ ...settings, translation: { ...settings.translation, sourceLanguage: value } })
+  },
+  {
+    key: "translationTarget", section: "transcript", label: "Translate into", kind: "select",
+    options: translationLanguages,
+    getValue: (settings) => settings.translation.targetLanguage,
+    setValue: (settings, value) => ({ ...settings, translation: { ...settings.translation, targetLanguage: value } })
+  },
   {
     key: "echoCancellation",
     section: "microphone",
@@ -539,7 +600,7 @@ export const settingsOptions: SettingsOption[] = [
   {
     key: "transcriptionModel",
     section: "recording",
-    label: "Whisper model",
+    label: "Transcription model",
     kind: "select",
     options: transcriptionModelOptions.map(({ value, label, languageSupport, runtime, timestampSupport }) => ({
       value,
@@ -667,11 +728,12 @@ export const settingsOptions: SettingsOption[] = [
   {
     key: "speechVolume",
     section: "speech",
-    label: "Speech volume",
-    kind: "number",
+    label: "Playback volume",
+    kind: "slider",
     min: 0,
     max: 1,
     step: 0.05,
+    valueLabel: (value) => value === 0 ? "Muted" : `${Math.round(value * 100)}%`,
     getValue: (settings) => settings.tts.volume,
     setValue: (settings, value) => ({
       ...settings,
@@ -749,6 +811,7 @@ export function encodeSettingsInUrl(settings: RuntimeSettings) {
 export function cloneRuntimeSettings(settings: RuntimeSettings): RuntimeSettings {
   return {
     ...settings,
+    translation: { ...settings.translation },
     audio: { ...settings.audio },
     transcription: { ...settings.transcription },
     vad: {

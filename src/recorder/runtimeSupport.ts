@@ -1,6 +1,7 @@
 export type TranscriptionRuntimeSupport = {
   hasWebAssembly: boolean;
   hasWebGpu: boolean;
+  hasCrossOriginIsolation: boolean;
   isSecureContext: boolean;
   isSupported: boolean;
 };
@@ -14,9 +15,13 @@ export function getTranscriptionRuntimeSupport(): TranscriptionRuntimeSupport {
   const isSecureContext =
     typeof window === "undefined" ? true : window.isSecureContext || isLocalhost(window.location.hostname);
 
+  const hasCrossOriginIsolation =
+    typeof window === "undefined" ? true : window.crossOriginIsolated === true;
+
   return {
     hasWebAssembly,
     hasWebGpu,
+    hasCrossOriginIsolation,
     isSecureContext,
     isSupported: hasWebAssembly && hasWebGpu && isSecureContext
   };

@@ -14,6 +14,9 @@ test.describe("info-recorder app", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByLabel("Transcription model", { exact: true })).toHaveValue(
+      "moonshine:small-streaming-en"
+    );
     await expect(page.getByRole("dialog", { name: "User settings" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "App", exact: true })).toHaveAttribute(
       "aria-selected",
@@ -43,7 +46,7 @@ test.describe("info-recorder app", () => {
       });
     });
 
-    await page.goto("/");
+    await page.goto("/?transcriptionModel=onnx-community%2Fwhisper-small.en_timestamped");
 
     await expect(page.getByRole("alertdialog", { name: "Browser upgrade required" })).toBeVisible();
     await expect(page.getByText(/missing WebGPU/i)).toBeVisible();
@@ -63,7 +66,7 @@ test.describe("info-recorder app", () => {
 
     await expect(page.getByRole("alertdialog", { name: "Browser upgrade required" })).toBeHidden();
     await page.getByRole("button", { name: "Settings" }).click();
-    await expect(page.getByLabel("Whisper model")).toHaveValue("wasm:base.en-q5_1");
+    await expect(page.getByLabel("Transcription model", { exact: true })).toHaveValue("wasm:base.en-q5_1");
   });
 
   test("explains how to upgrade when WebAssembly is unavailable", async ({ page }) => {
@@ -78,6 +81,6 @@ test.describe("info-recorder app", () => {
 
     await expect(page.getByRole("alertdialog", { name: "Browser upgrade required" })).toBeVisible();
     await expect(page.getByText(/missing WebAssembly/i)).toBeVisible();
-    await expect(page.getByText(/WebAssembly must also be enabled/i)).toBeVisible();
+    await expect(page.getByText(/WebAssembly must be enabled/i)).toBeVisible();
   });
 });

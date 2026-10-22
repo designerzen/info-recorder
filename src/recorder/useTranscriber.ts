@@ -19,7 +19,7 @@ import { resetSileroVadRuntimeState, type SileroVadRuntimeState } from "./silero
 import { withTimeout } from "./asyncTimeout";
 import type { TranscriptParagraph, TranscriptWord } from "../transcript/timedTranscript";
 import { getTranscriptionRuntimeSupport } from "./runtimeSupport";
-import { isWasmTranscriptionModelId } from "../config/settings";
+import { isMoonshineModelId, isWasmTranscriptionModelId } from "../config/settings";
 import type { ModelInventoryEntry } from "./modelInventory";
 import { GeoLocationService } from "./geoLocationService";
 
@@ -101,6 +101,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   const mediaProcessorNodeRef = useRef<AudioWorkletNode | null>(null);
   const mediaSilentGainRef = useRef<GainNode | null>(null);
   const sourceMediaUrlRef = useRef("");
+  const recordedSourceRef = useRef<{ url: string; chunkCount: number } | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackNodeRef = useRef<AudioWorkletNode | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
@@ -124,6 +125,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   const hasTranscriptRef = useRef(false);
   const transcriptParagraphSequenceRef = useRef(0);
   const liveTranscribedSecondsRef = useRef(0);
+  const liveSpeechStartSecondsRef = useRef(0);
   const lastActivityUpdateRef = useRef(0);
   const isWorkerReadyRef = useRef(false);
   const workerReadyPromiseRef = useRef<Promise<void> | null>(null);
@@ -154,8 +156,9 @@ export function useTranscriber(settings: RuntimeSettings) {
   const [mediaTranscriptionProgress, setMediaTranscriptionProgress] = useState(0);
   const [sourceActivityRms, setSourceActivityRms] = useState(0);
   const [sourceMedia, setSourceMedia] = useState<SourceMedia | null>(null);
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [modelCacheStatus, setModelCacheStatus] = useState(
-    "Whisper downloads once, then stays available offline on this device."
+    "The transcription model downloads once, then stays available offline on this device."
   );
   const [modelInventory, setModelInventory] = useState<ModelInventoryEntry[]>([]);
   const [modelInventoryMessage, setModelInventoryMessage] = useState("");
@@ -166,10 +169,14 @@ export function useTranscriber(settings: RuntimeSettings) {
   const [transcriptParagraphs, setTranscriptParagraphs] = useState<TranscriptParagraph[]>([]);
 
   const runtimeSupport = getTranscriptionRuntimeSupport();
-  const requiresWebGpu = !isWasmTranscriptionModelId(settings.transcription.modelId);
+  const requiresWebGpu =
+    !isWasmTranscriptionModelId(settings.transcription.modelId) &&
+    !isMoonshineModelId(settings.transcription.modelId);
+  const requiresCrossOriginIsolation = isMoonshineModelId(settings.transcription.modelId);
   const isTranscriptionSupported =
     runtimeSupport.hasWebAssembly &&
     runtimeSupport.isSecureContext &&
+    (!requiresCrossOriginIsolation || runtimeSupport.hasCrossOriginIsolation) &&
     (!requiresWebGpu || runtimeSupport.hasWebGpu);
   const isOpfsRecordingAvailable = canUseOpfsRecording();
   const isOpfsPlaybackAvailable = canUseOpfsPlayback();
@@ -302,11 +309,35 @@ export function useTranscriber(settings: RuntimeSettings) {
   }, []);
 
   const clearSourceMedia = useCallback(() => {
+    if (recordedSourceRef.current) {
+      URL.revokeObjectURL(recordedSourceRef.current.url);
+      recordedSourceRef.current = null;
+    }
     if (sourceMediaUrlRef.current) {
       URL.revokeObjectURL(sourceMediaUrlRef.current);
       sourceMediaUrlRef.current = "";
     }
     setSourceMedia(null);
+    opfsSessionRef.current = null;
+    setAudioParts([]);
+    setOpfsChunkCount(0);
+    setRecordingStartedAt(null);
+  }, []);
+
+  const getRecordingSourceMedia = useCallback(async (): Promise<SourceMedia | null> => {
+    const session = opfsSessionRef.current;
+    if (!session) return null;
+    await opfsWriteQueueRef.current;
+    if (session.chunks.length === 0) return null;
+    const chunkCount = session.chunks.length;
+    if (recordedSourceRef.current?.chunkCount !== chunkCount) {
+      const files = await readStoredChunkFiles(session);
+      if (opfsSessionRef.current !== session) return null;
+      const url = URL.createObjectURL(new Blob(files, { type: session.mimeType }));
+      if (recordedSourceRef.current) URL.revokeObjectURL(recordedSourceRef.current.url);
+      recordedSourceRef.current = { url, chunkCount };
+    }
+    return { url: recordedSourceRef.current!.url, kind: "audio", fileName: session.name };
   }, []);
 
   const cleanupMicrophoneCapture = useCallback(() => {
@@ -376,7 +407,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     setIsModelLoading(false);
     setModelLoadProgress(0);
     setModelLoadMessage("");
-    setModelCacheStatus("Checking offline Whisper model cache...");
+    setModelCacheStatus("Checking offline transcription model cache...");
     setModelLoadTransferredBytes(0);
     setModelLoadTotalBytes(0);
     worker.postMessage({ type: "configure", transcription: settings.transcription });
@@ -452,6 +483,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     liveSpeechBufferedSamplesRef.current = 0;
     liveSpeechStartsParagraphRef.current = false;
     liveTranscribedSecondsRef.current = 0;
+    liveSpeechStartSecondsRef.current = 0;
     setIsPreparing(false);
     setIsRecording(false);
     setIsTranscribingMedia(false);
@@ -471,10 +503,10 @@ export function useTranscriber(settings: RuntimeSettings) {
         hasCheckedModelCacheRef.current = true;
         setIsModelLoading(false);
         setModelLoadProgress(100);
-        setModelLoadMessage("Whisper model is ready.");
+        setModelLoadMessage("Transcription model is ready.");
         setProgress("");
         setIsModelCached(true);
-        setModelCacheStatus("Whisper model available offline.");
+        setModelCacheStatus("Transcription model available offline.");
         worker.postMessage({ type: "catalog-status" });
       }
 
@@ -533,19 +565,19 @@ export function useTranscriber(settings: RuntimeSettings) {
           setIsModelCached(true);
           setIsModelLoading(false);
           setModelLoadProgress(100);
-          setModelLoadMessage("Whisper model is already available offline.");
-          setModelCacheStatus("Whisper model available offline.");
+          setModelLoadMessage("Transcription model is already available offline.");
+          setModelCacheStatus("Transcription model available offline.");
           setModelLoadTransferredBytes(data.sizeBytes ?? data.cachedBytes ?? 0);
           setModelLoadTotalBytes(data.sizeBytes ?? data.cachedBytes ?? 0);
         } else if (data.totalFiles > 0) {
           setIsModelCached(false);
           setModelCacheStatus(
-            `Whisper model will download once. ${data.cachedFiles}/${data.totalFiles} files are already available offline.`
+            `Transcription model will download once. ${data.cachedFiles}/${data.totalFiles} files are already available offline.`
           );
           setModelLoadTransferredBytes(data.cachedBytes ?? 0);
           setModelLoadTotalBytes(data.sizeBytes ?? 0);
         } else {
-          setModelCacheStatus(data.message ?? "Whisper model cache status unavailable.");
+          setModelCacheStatus(data.message ?? "Transcription model cache status unavailable.");
         }
         worker.postMessage({ type: "catalog-status" });
       }
@@ -584,6 +616,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       cleanupMediaSource();
       clearSourceMedia();
       disposeWaveformWorker();
+      geoLocationServiceRef.current.stop();
     };
   }, [cleanupMediaSource, cleanupMicrophoneCapture, clearSourceMedia, disposeWaveformWorker, stopAnalyser, stopPlayback]);
 
@@ -598,6 +631,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       opfsWriteQueueRef.current = Promise.resolve();
       opfsChunkSequenceRef.current = 0;
       opfsNextChunkStartMsRef.current = Date.now();
+      setRecordingStartedAt(opfsNextChunkStartMsRef.current);
       currentPartChunksRef.current = [];
       currentPartStartsAtRef.current = "";
       geoLocationServiceRef.current.start();
@@ -682,6 +716,8 @@ export function useTranscriber(settings: RuntimeSettings) {
 
   const processPcmChunk = useCallback(
     async (mono: Float32Array, sampleRate: number) => {
+      const chunkStartSeconds = liveTranscribedSecondsRef.current;
+      liveTranscribedSecondsRef.current += mono.length / sampleRate;
       if (!settings.vad.enabled) {
         latestVoiceRef.current = {
           hasSpeech: true,
@@ -691,6 +727,7 @@ export function useTranscriber(settings: RuntimeSettings) {
         };
 
         if (liveSpeechBufferedSamplesRef.current === 0) {
+          liveSpeechStartSecondsRef.current = chunkStartSeconds;
           liveSpeechStartsParagraphRef.current = nextSegmentStartsParagraphRef.current;
           nextSegmentStartsParagraphRef.current = false;
         }
@@ -700,17 +737,21 @@ export function useTranscriber(settings: RuntimeSettings) {
           mono
         );
 
-        const targetSamples = getSamplesForMs(sampleRate, settings.audio.transcriptionChunkMs);
+        const targetSamples = getSamplesForMs(
+          sampleRate,
+          isMoonshineModelId(settings.transcription.modelId)
+            ? LIVE_ANALYSIS_CHUNK_MS
+            : settings.audio.transcriptionChunkMs
+        );
         if (liveSpeechBufferedSamplesRef.current >= targetSamples) {
           const speechAudio = consumeBufferedAudio(
             liveSpeechChunksRef.current,
             liveSpeechBufferedSamplesRef
           );
           const audio = concatAudio(tailRef.current, speechAudio);
-          const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
+          const offsetSeconds = Math.max(0, liveSpeechStartSecondsRef.current - (tailRef.current.length / sampleRate));
           const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
           tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
-          liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
 
           worker.postMessage(
             {
@@ -737,11 +778,17 @@ export function useTranscriber(settings: RuntimeSettings) {
         settings.vad.mode === "silero-vad" ? sileroVadStateRef.current : undefined
       );
       latestVoiceRef.current = voice;
-      const targetSamples = getSamplesForMs(sampleRate, settings.audio.transcriptionChunkMs);
+      const targetSamples = getSamplesForMs(
+        sampleRate,
+        isMoonshineModelId(settings.transcription.modelId)
+          ? LIVE_ANALYSIS_CHUNK_MS
+          : settings.audio.transcriptionChunkMs
+      );
       const paragraphSilenceSamples = getSamplesForMs(sampleRate, settings.vad.paragraphSilenceMs);
 
       if (voice.hasSpeech) {
         if (liveSpeechBufferedSamplesRef.current === 0) {
+          liveSpeechStartSecondsRef.current = chunkStartSeconds;
           liveSpeechStartsParagraphRef.current = nextSegmentStartsParagraphRef.current;
           nextSegmentStartsParagraphRef.current = false;
         }
@@ -757,10 +804,9 @@ export function useTranscriber(settings: RuntimeSettings) {
             liveSpeechBufferedSamplesRef
           );
           const audio = concatAudio(tailRef.current, speechAudio);
-          const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
+          const offsetSeconds = Math.max(0, liveSpeechStartSecondsRef.current - (tailRef.current.length / sampleRate));
           const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
           tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
-          liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
 
           worker.postMessage(
             {
@@ -795,10 +841,9 @@ export function useTranscriber(settings: RuntimeSettings) {
             liveSpeechBufferedSamplesRef
           );
           const audio = concatAudio(tailRef.current, speechAudio);
-          const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
+          const offsetSeconds = Math.max(0, liveSpeechStartSecondsRef.current - (tailRef.current.length / sampleRate));
           const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
           tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
-          liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
 
           worker.postMessage(
             {
@@ -817,8 +862,10 @@ export function useTranscriber(settings: RuntimeSettings) {
             nextSegmentStartsParagraphRef.current = true;
           }
           setPartialText("");
+          tailRef.current = new Float32Array();
         }
       } else {
+        tailRef.current = new Float32Array();
         if (hasTranscriptRef.current) {
           nextSegmentStartsParagraphRef.current = true;
         }
@@ -890,10 +937,9 @@ export function useTranscriber(settings: RuntimeSettings) {
           liveSpeechBufferedSamplesRef
         );
         const audio = concatAudio(tailRef.current, speechAudio);
-        const offsetSeconds = Math.max(0, liveTranscribedSecondsRef.current - (tailRef.current.length / sampleRate));
+        const offsetSeconds = Math.max(0, liveSpeechStartSecondsRef.current - (tailRef.current.length / sampleRate));
         const overlapSamples = Math.floor(sampleRate * (settings.audio.overlapMs / 1000));
         tailRef.current = audio.slice(Math.max(0, audio.length - overlapSamples));
-        liveTranscribedSecondsRef.current += speechAudio.length / sampleRate;
         worker.postMessage(
           {
             type: "transcribe",
@@ -913,11 +959,19 @@ export function useTranscriber(settings: RuntimeSettings) {
 
   const stop = useCallback(async () => {
     const sampleRate = audioContextRef.current?.sampleRate ?? 16000;
-    mediaRecorderRef.current?.stop();
+    const recorder = mediaRecorderRef.current;
+    const stopped = recorder && recorder.state !== "inactive"
+      ? new Promise<void>((resolve) => {
+          recorder.addEventListener("stop", () => resolve(), { once: true });
+          recorder.stop();
+        })
+      : Promise.resolve();
     mediaRecorderRef.current = null;
     try {
       await flushMicrophonePcmCapture(sampleRate);
       await waitForWorkerIdle();
+      await stopped;
+      await opfsWriteQueueRef.current;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to finish live transcription.");
     }
@@ -981,11 +1035,16 @@ export function useTranscriber(settings: RuntimeSettings) {
   const start = useCallback(async () => {
     setError("");
     clearSourceMedia();
+    setParagraphs([]);
+    setTranscriptParagraphs([]);
+    setPartialText("");
+    hasTranscriptRef.current = false;
+    transcriptParagraphSequenceRef.current = 0;
     setIsPreparing(true);
 
     if (!isTranscriptionSupported) {
       setIsPreparing(false);
-      setError("This app needs WebGPU, WebAssembly, and a secure browser context before it can transcribe audio.");
+      setError("The selected transcription model is not supported in this browser context.");
       return;
     }
 
@@ -1070,10 +1129,10 @@ export function useTranscriber(settings: RuntimeSettings) {
     setError("");
     setModelLoadProgress(0);
     setModelLoadMessage(
-      isModelCached ? "Whisper model is already available offline." : "Preparing offline Whisper model cache..."
+      isModelCached ? "Transcription model is already available offline." : "Preparing offline transcription model cache..."
     );
     setModelCacheStatus(
-      isModelCached ? "Whisper model available offline." : "Preparing offline Whisper model cache..."
+      isModelCached ? "Transcription model available offline." : "Preparing offline transcription model cache..."
     );
     if (isModelCached) {
       setIsModelLoading(false);
@@ -1226,7 +1285,7 @@ export function useTranscriber(settings: RuntimeSettings) {
   const transcribeMediaFile = useCallback(
     async (file: File) => {
       if (!isTranscriptionSupported) {
-        setError("This app needs WebGPU, WebAssembly, and a secure browser context before it can transcribe audio.");
+        setError("The selected transcription model is not supported in this browser context.");
         return;
       }
 
@@ -1238,6 +1297,11 @@ export function useTranscriber(settings: RuntimeSettings) {
       setIsRecording(true);
       setIsTranscribingMedia(true);
       clearSourceMedia();
+      setParagraphs([]);
+      setTranscriptParagraphs([]);
+      setPartialText("");
+      hasTranscriptRef.current = false;
+      transcriptParagraphSequenceRef.current = 0;
       const nextSourceUrl = URL.createObjectURL(file);
       sourceMediaUrlRef.current = nextSourceUrl;
       setSourceMedia({
@@ -1423,6 +1487,7 @@ export function useTranscriber(settings: RuntimeSettings) {
     isRecording,
     isTranscribingMedia,
     isTranscriptionSupported,
+    requiresCrossOriginIsolation,
     requiresWebGpu,
     runtimeSupport,
     mediaFileName,
@@ -1445,6 +1510,8 @@ export function useTranscriber(settings: RuntimeSettings) {
     mediaTranscriptionProgress,
     sourceActivityRms,
     sourceMedia,
+    recordingStartedAt,
+    getRecordingSourceMedia,
     paragraphs,
     transcriptParagraphs,
     vadMode: settings.vad.mode,

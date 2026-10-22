@@ -1,5 +1,5 @@
 import { RotateCcw, X } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { PageSettingsControls } from "./PageSettingsDialog";
 import type { PageStyleSettings } from "../config/pageStyle";
 import {
@@ -17,6 +17,7 @@ import {
 } from "../recorder/modelInventory";
 
 type SimpleSettingsProps = {
+  translationControls?: ReactNode;
   disabled: boolean;
   isOpen: boolean;
   isOpfsAvailable: boolean;
@@ -37,6 +38,7 @@ type SimpleSettingsProps = {
 };
 
 export function SimpleSettings({
+  translationControls,
   disabled,
   isOpen,
   isOpfsAvailable,
@@ -55,18 +57,15 @@ export function SimpleSettings({
   onSetVoice,
   onUpdate
 }: SimpleSettingsProps) {
-  const echoCancellationOption = getOption("echoCancellation");
-  const noiseSuppressionOption = getOption("noiseSuppression");
-  const autoGainControlOption = getOption("autoGainControl");
   const activityDetectionOption = getOption("activityDetection");
   const detectionOption = getOption("vad");
   const silenceOption = getActiveSilenceOption(settings);
   const recordOption = getOption("recordOpfs");
-  const recordingFormatOption = getOption("recordingFormat");
   const transcriptionModelOption = getOption("transcriptionModel");
   const transcriptScrollOption = getOption("transcriptScrollSpeed");
   const voiceEngineOption = getOption("voiceEngine");
   const sentencePlaybackModeOption = getOption("sentencePlaybackMode");
+  const volumeOption = getOption("speechVolume");
   const [activeTab, setActiveTab] = useState<"app" | "appearance">("app");
 
   if (!isOpen) return null;
@@ -82,7 +81,7 @@ export function SimpleSettings({
         <header className="settings-dialog-header">
           <div>
             <h2>Settings</h2>
-            <p>Microphone, activity detection, recording, and speech options.</p>
+            <p>Set up recording, playback, and appearance.</p>
           </div>
           <button type="button" onClick={onClose} title="Close settings" aria-label="Close settings">
             <X size={18} />
@@ -109,160 +108,160 @@ export function SimpleSettings({
           </button>
         </div>
         {activeTab === "app" ? (
-          <div className="settings-body" role="tabpanel">
-        <SettingControl
-          disabled={disabled}
-          modelDownloadSpeedBps={modelDownloadSpeedBps}
-          modelInventory={modelInventory}
-          modelInventoryMessage={modelInventoryMessage}
-          option={transcriptionModelOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <label className="settings-control">
-          <span>Microphone</span>
-          <select
-            aria-label="Microphone"
-            value={settings.microphone.deviceId}
-            disabled={disabled}
-            onChange={(event) => onSetMicrophone(event.target.value)}
-          >
-            <option value="">System default</option>
-            {microphoneDevices.map((device, index) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label || `Microphone ${index + 1}`}
-              </option>
-            ))}
-          </select>
-        </label>
-        <SettingControl
-          disabled={disabled}
-          option={echoCancellationOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <SettingControl
-          disabled={disabled}
-          option={noiseSuppressionOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <SettingControl
-          disabled={disabled}
-          option={autoGainControlOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <SettingControl
-          disabled={disabled}
-          option={activityDetectionOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        {settings.vad.enabled ? (
-          <>
-            <SettingControl
-              disabled={disabled}
-              option={detectionOption}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-            <SettingControl
-              disabled={disabled}
-              option={silenceOption}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          </>
-        ) : null}
-        <label className="settings-control checkbox-control">
-          <input
-            type="checkbox"
-            checked={settings.recording.shouldRecordToOpfs && isOpfsAvailable}
-            disabled={disabled || !isOpfsAvailable}
-            onChange={(event) => onUpdate(recordOption, event.target.checked)}
-          />
-          <span>Save audio chunks</span>
-        </label>
-        <SettingControl
-          disabled={disabled}
-          option={recordingFormatOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <SettingControl
-          disabled={disabled}
-          option={transcriptScrollOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <SettingControl
-          disabled={isSpeaking}
-          option={voiceEngineOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <SettingControl
-          disabled={isSpeaking}
-          option={sentencePlaybackModeOption}
-          settings={settings}
-          onUpdate={onUpdate}
-        />
-        <label className="settings-control">
-          <span>Voice</span>
-          <select
-            aria-label="Voice"
-            value={selectedVoiceId}
-            disabled={isSpeaking || voiceOptions.length === 0}
-            onChange={(event) => onSetVoice(event.target.value)}
-          >
-            {voiceOptions.length > 0 ? (
-              voiceOptions.map((voice) => (
-                <option key={voice.id} value={voice.id}>
-                  {voice.name}
-                </option>
-              ))
-            ) : (
-              <option value={selectedVoiceId}>Default</option>
-            )}
-          </select>
-        </label>
-        <details className="advanced-settings">
-          <summary>Advanced</summary>
-          <div className="advanced-grid">
-            {settingsOptions
-              .filter(
-                (option) =>
-                  ![
-                    detectionOption.key,
-                    silenceOption.key,
-                    echoCancellationOption.key,
-                    noiseSuppressionOption.key,
-                    autoGainControlOption.key,
-                    activityDetectionOption.key,
-                    recordOption.key,
-                    recordingFormatOption.key,
-                    transcriptionModelOption.key,
-                    transcriptScrollOption.key,
-                    voiceEngineOption.key,
-                    sentencePlaybackModeOption.key
-                  ].includes(option.key)
-              )
-              .map((option) => (
-                <SettingControl
+          <div className="settings-body settings-app-body" role="tabpanel">
+            <SettingsGroup title="Recording">
+              <SettingControl
+                disabled={disabled}
+                modelDownloadSpeedBps={modelDownloadSpeedBps}
+                modelInventory={modelInventory}
+                modelInventoryMessage={modelInventoryMessage}
+                option={transcriptionModelOption}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+              <label className="settings-control">
+                <span>Microphone</span>
+                <select
+                  aria-label="Microphone"
+                  value={settings.microphone.deviceId}
                   disabled={disabled}
-                  key={option.key}
-                  option={option}
-                  settings={settings}
-                  onUpdate={onUpdate}
+                  onChange={(event) => onSetMicrophone(event.target.value)}
+                >
+                  <option value="">System default</option>
+                  {microphoneDevices.map((device, index) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Microphone ${index + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <SettingControl
+                disabled={disabled}
+                option={activityDetectionOption}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+              {settings.vad.enabled ? (
+                <>
+                  <SettingControl
+                    disabled={disabled}
+                    option={detectionOption}
+                    settings={settings}
+                    onUpdate={onUpdate}
+                  />
+                  <SettingControl
+                    disabled={disabled}
+                    option={silenceOption}
+                    settings={settings}
+                    onUpdate={onUpdate}
+                  />
+                </>
+              ) : null}
+              <label className="settings-control checkbox-control">
+                <input
+                  type="checkbox"
+                  checked={settings.recording.shouldRecordToOpfs && isOpfsAvailable}
+                  disabled={disabled || !isOpfsAvailable}
+                  onChange={(event) => onUpdate(recordOption, event.target.checked)}
                 />
-              ))}
-          </div>
-        </details>
-        <button type="button" onClick={onReset} disabled={disabled} title="Reset settings">
-          <RotateCcw size={18} />
-          <span>Reset settings</span>
-        </button>
+                <span>Save audio chunks</span>
+              </label>
+            </SettingsGroup>
+            {translationControls}
+        <SettingsGroup title="Playback">
+              <div className="volume-settings">
+                <SettingControl disabled={isSpeaking} option={volumeOption} settings={settings} onUpdate={onUpdate} />
+                <div className="volume-presets" role="group" aria-label="Volume presets">
+                  {[{ label: "Mute", value: 0 }, { label: "Quiet", value: 0.25 }, { label: "Medium", value: 0.5 }, { label: "Full", value: 1 }].map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      aria-pressed={Math.abs(settings.tts.volume - preset.value) < 0.001}
+                      disabled={isSpeaking}
+                      onClick={() => onUpdate(volumeOption, preset.value)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="settings-hint">Applies to speech and source audio. Stop playback to change volume.</p>
+              </div>
+              <SettingControl
+                disabled={disabled}
+                option={transcriptScrollOption}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+              <SettingControl
+                disabled={isSpeaking}
+                option={voiceEngineOption}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+              <SettingControl
+                disabled={isSpeaking}
+                option={sentencePlaybackModeOption}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+              <label className="settings-control">
+                <span>Voice</span>
+                <select
+                  aria-label="Voice"
+                  value={selectedVoiceId}
+                  disabled={isSpeaking || voiceOptions.length === 0}
+                  onChange={(event) => onSetVoice(event.target.value)}
+                >
+                  {voiceOptions.length > 0 ? (
+                    voiceOptions.map((voice) => (
+                      <option key={voice.id} value={voice.id}>
+                        {voice.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={selectedVoiceId}>Default</option>
+                  )}
+                </select>
+              </label>
+            </SettingsGroup>
+            <details className="advanced-settings">
+              <summary>Advanced settings</summary>
+              <div className="advanced-grid">
+                {settingsOptions
+                  .filter(
+                    (option) =>
+                      ![
+                        "translationSource",
+                    "translationTarget",
+                    detectionOption.key,
+                        silenceOption.key,
+                        activityDetectionOption.key,
+                        recordOption.key,
+                        transcriptionModelOption.key,
+                        transcriptScrollOption.key,
+                        voiceEngineOption.key,
+                        sentencePlaybackModeOption.key,
+                        volumeOption.key
+                      ].includes(option.key)
+                  )
+                  .map((option) => (
+                    <SettingControl
+                      disabled={option.section === "speech" ? isSpeaking : disabled}
+                      key={option.key}
+                      option={option}
+                      settings={settings}
+                      onUpdate={onUpdate}
+                    />
+                  ))}
+              </div>
+            </details>
+            <footer className="settings-footer">
+              <button type="button" onClick={onReset} disabled={disabled} title="Reset settings">
+                <RotateCcw size={18} />
+                <span>Reset settings</span>
+              </button>
+              <button type="button" onClick={onClose}>Done</button>
+            </footer>
           </div>
         ) : (
           <div className="settings-body page-settings-main" role="tabpanel">
@@ -271,6 +270,15 @@ export function SimpleSettings({
         )}
       </section>
     </div>
+  );
+}
+
+function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <fieldset className="settings-group">
+      <legend>{title}</legend>
+      <div className="settings-group-grid">{children}</div>
+    </fieldset>
   );
 }
 
@@ -316,32 +324,32 @@ function SettingControl({
         (item) => item.value === option.getValue(settings)
       );
       return (
-        <label className="settings-control model-select-control">
-          <span>{option.label}</span>
-          <select
-            aria-label={option.label}
-            value={option.getValue(settings)}
-            disabled={disabled}
-            onChange={(event) => onUpdate(option, event.target.value)}
-          >
-            {transcriptionModelOptions.map((item) => {
-              const inventoryEntry = inventory.find((entry) => entry.modelId === item.value);
-              return (
-                <option key={item.value} value={item.value}>
-                  {formatModelOptionLabel(
-                    item.label,
-                    item.downloadSizeBytes ?? inventoryEntry?.sizeBytes ?? 0,
-                    inventoryEntry,
-                    speedBps
-                  )}
-                </option>
-              );
-            })}
-          </select>
+        <div className="settings-control model-select-control">
+          <label className="settings-control">
+            <span>{option.label}</span>
+            <select
+              aria-label={option.label}
+              value={option.getValue(settings)}
+              disabled={disabled}
+              onChange={(event) => onUpdate(option, event.target.value)}
+            >
+              {transcriptionModelOptions.map((item) => {
+                const inventoryEntry = inventory.find((entry) => entry.modelId === item.value);
+                return (
+                  <option key={item.value} value={item.value}>
+                    {formatModelOptionLabel(
+                      item.label,
+                      item.downloadSizeBytes ?? inventoryEntry?.sizeBytes ?? 0,
+                      inventoryEntry,
+                      speedBps
+                    )}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
           {selectedModel ? (
             <span className="model-select-details">
-              <strong>{selectedModel.parameters}</strong>
-              <span>{selectedModel.runtime} - {selectedModel.timestampSupport}</span>
               <span>
                 {availableOfflineCount > 0
                   ? `${availableOfflineCount}/${transcriptionModelOptions.length} models available offline`
@@ -356,12 +364,20 @@ function SettingControl({
                 )}
               </span>
               <span>{selectedModel.summary}</span>
-              <span>{selectedModel.whyChoose}</span>
-              {selectedModel.caution ? <span>{selectedModel.caution}</span> : null}
-              <code>{selectedModel.repo}</code>
             </span>
           ) : null}
-        </label>
+          {selectedModel ? (
+            <details className="model-technical-details">
+              <summary>Model details</summary>
+              <div className="model-select-details">
+                <span>{selectedModel.parameters} · {selectedModel.runtime} · {selectedModel.timestampSupport}</span>
+                <span>{selectedModel.whyChoose}</span>
+                {selectedModel.caution ? <span>{selectedModel.caution}</span> : null}
+                <code>{selectedModel.repo}</code>
+              </div>
+            </details>
+          ) : null}
+        </div>
       );
     }
 
@@ -396,8 +412,8 @@ function SettingControl({
           max={option.max}
           step={option.step}
           value={value}
+          aria-valuetext={option.valueLabel ? option.valueLabel(value) : String(value)}
           disabled={disabled}
-          onInput={(event) => onUpdate(option, Number(event.currentTarget.value))}
           onChange={(event) => onUpdate(option, Number(event.target.value))}
         />
         <output>{option.valueLabel ? option.valueLabel(value) : value}</output>
