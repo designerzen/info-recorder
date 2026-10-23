@@ -1789,3 +1789,62 @@ h2 {
 
 .translated-sentence { display: inline; }
 .sentence-translation { display: block; padding: 0.25rem 0.6rem 0.75rem; font-size: 0.9em; opacity: 0.8; white-space: pre-wrap; }
+.activity-progress-panel {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 4;
+  padding: 0.85rem max(1rem, calc((100vw - 1100px) / 2));
+  background: var(--page-surface, #fff);
+  color: var(--page-text, #13211b);
+  border-top: 2px solid var(--page-border, #cdd5c8);
+  box-shadow: 0 -4px 20px #13211b14;
+}
+
+.activity-progress { display: grid; gap: 0.5rem; }
+.activity-progress-heading { display: flex; align-items: center; gap: 0.65rem; }
+.activity-progress-value { margin-left: auto; font-variant-numeric: tabular-nums; }
+.activity-progress-input { display: flex; align-items: center; gap: 0.75rem; font-size: 0.8rem; }
+.activity-progress-input span { flex-shrink: 0; }
+.activity-progress[data-active="true"][data-recording="true"] .activity-progress-symbol {
+  background: #c32c37;
+  border-color: #c32c37;
+  animation: activity-pulse 1.5s ease-in-out infinite;
+}
+.activity-progress p { margin: 0; overflow-wrap: anywhere; font-size: 0.9rem; }
+.activity-progress-symbol {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.activity-progress[data-active="true"] .activity-progress-symbol {
+  border-right-color: transparent;
+  animation: activity-rotate 0.9s linear infinite;
+}
+.activity-progress progress, .activity-progress meter {
+  width: 100%;
+  height: 0.65rem;
+  accent-color: var(--page-accent, #15655a);
+}
+.activity-progress progress:indeterminate { animation: activity-pulse 1.5s ease-in-out infinite; }
+.activity-progress-dialog {
+  width: min(480px, calc(100vw - 2rem));
+  box-sizing: border-box;
+  padding: 1.5rem;
+  border: 2px solid var(--page-border, #cdd5c8);
+  border-radius: 1rem;
+  background: var(--page-surface, #fff);
+  color: var(--page-text, #13211b);
+  box-shadow: 0 16px 64px #0005;
+}
+.activity-progress-dialog::backdrop { background: #101c18a6; backdrop-filter: blur(3px); }
+.app-layout, .app-shell[data-recording="true"] .app-layout { padding-bottom: 9rem; }
+.transcript-controls:empty { display: none; }
+@keyframes activity-rotate { to { transform: rotate(360deg); } }
+@keyframes activity-pulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .activity-progress[data-active="true"][data-recording="true"] .activity-progress-symbol,
+  .activity-progress[data-active="true"] .activity-progress-symbol,
+  .activity-progress progress:indeterminate { animation: none; }
+}

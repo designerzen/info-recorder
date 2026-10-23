@@ -1,12 +1,11 @@
 import { TranslationSettings } from "./components/TranslationSettings";
 import { useBrowserTranslation } from "./translation/useBrowserTranslation";
 import { createRoot } from "react-dom/client";
-import { Circle, FileText, Map, Pause, Play, SlidersHorizontal, Square, Upload } from "lucide-react";
+import { Circle, FileText, Map, Play, SlidersHorizontal, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import "./styles.css";
-import { ActivityMeter } from "./components/ActivityMeter";
-import { ModelLoadDialog } from "./components/ModelLoadDialog";
+import { ActivityProgress } from "./components/ActivityProgress";
 import { PageStyleSheet } from "./components/PageStyleSheet";
 import { PhraseLocationMap, type PhraseLocationMapMessage } from "./components/PhraseLocationMap";
 import { SimpleSettings } from "./components/SimpleSettings";
@@ -33,7 +32,6 @@ function App() {
   const [settings, setSettings] = useState(() => readSettingsFromUrl());
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
   const [workspaceView, setWorkspaceView] = useState<"transcript" | "map">("transcript");
   const [playbackError, setPlaybackError] = useState("");
   const playbackRequestRef = useRef(0);
@@ -166,21 +164,42 @@ function App() {
   const subtitleText = speech.isSpeaking ? speech.activePhraseText || transcriptText : "";
   const setSubtitleCanvas = useJassubSubtitles(subtitleText, settings.subtitles);
   const isBusyTranscribingMedia = recorder.isTranscribingMedia;
-  const heroTitle = recorder.isRecording
+  const isLiveRecording = recorder.isRecording && !isBusyTranscribingMedia && !recorder.isPreparing;
+  const isBlocking = recorder.isModelLoading || (recorder.isPreparing && !isBusyTranscribingMedia);
+  const activityActive = isBlocking || isBusyTranscribingMedia || isLiveRecording || translation.loading || speech.isSpeaking || Boolean(recorder.progress);
+  const activityTitle = recorder.isModelLoading ? "Preparing transcription model"
+    : isBlocking ? "Preparing microphone"
+    : isBusyTranscribingMedia ? "Transcribing media"
+    : isLiveRecording ? "Recording"
+    : translation.loading ? "Preparing translation"
+    : speech.isSpeaking ? "Playing transcript"
+    : recorder.progress ? "Processing audio" : "Ready";
+  const activityMessage = recorder.isModelLoading ? recorder.modelLoadMessage || "Loading model files. Keep this tab open."
+    : isBlocking ? "Starting the microphone and transcription engine. Allow microphone access if prompted."
+    : isBusyTranscribingMedia ? recorder.progress || "Preparing media. You can review the transcript as text arrives."
+    : isLiveRecording ? recorder.progress || "Microphone is live. New speech will appear in the transcript."
+    : translation.loading ? translation.status
+    : speech.isSpeaking ? speech.speechStatus || "Playing the selected audio or voice."
+    : recorder.progress || speech.speechStatus || (translation.enabled ? translation.status : "Record or upload media to begin.");
+  // Unknown preparation work stays indeterminate; percentages represent measured work only.
+  const activityProgress = recorder.isModelLoading
+    ? recorder.modelLoadTotalBytes > 0 ? recorder.modelLoadProgress : undefined
+    : isBusyTranscribingMedia && recorder.mediaTranscriptionProgress > 0 ? recorder.mediaTranscriptionProgress : undefined;
+  const heroTitle = isLiveRecording
     ? "Recording live transcript"
     : isBusyTranscribingMedia
       ? "Transcribing your media"
       : transcriptBlocks.length > 0
         ? "Transcript workspace"
         : "Word Trail";
-  const heroDescription = recorder.isRecording
+  const heroDescription = isLiveRecording
     ? "The microphone is live. Your transcript will keep updating below as new speech arrives."
     : isBusyTranscribingMedia
       ? "Uploaded media is being processed locally. You can follow progress and review the transcript as chunks finish."
       : transcriptBlocks.length > 0
         ? "Review, play back, and follow the transcript from one focused workspace."
         : "Record from the microphone or upload audio and video files for fast local transcription.";
-  const statusLabel = recorder.isRecording
+  const statusLabel = isLiveRecording
     ? "Live microphone"
     : isBusyTranscribingMedia
       ? "Media transcription"
@@ -319,7 +338,6 @@ function App() {
       container.scrollTop = 0;
       return;
     }
-    if (!isAutoScrollEnabled) return;
 
     const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
     const distanceFromBottom = maxScrollTop - container.scrollTop;
@@ -327,17 +345,18 @@ function App() {
     if (!shouldFollow) return;
 
     transcriptEndRef.current?.scrollIntoView({ block: "end" });
-  }, [isAutoScrollEnabled, transcriptBlocks, workspaceView]);
+  }, [transcriptBlocks, workspaceView]);
 
   return (
     <main className="app-shell" data-recording={recorder.isRecording}>
-      <ModelLoadDialog
-        isOpen={recorder.isModelLoading}
-        message={recorder.modelLoadMessage}
-        progress={recorder.modelLoadProgress}
-        transferredBytes={recorder.modelLoadTransferredBytes}
-        totalBytes={recorder.modelLoadTotalBytes}
-        downloadSpeedBps={recorder.modelDownloadSpeedBps}
+      <ActivityProgress
+        title={activityTitle}
+        message={activityMessage}
+        active={activityActive}
+        blocking={isBlocking}
+        progress={activityProgress}
+        recordingStartedAt={isLiveRecording ? recorder.recordingStartedAt ?? undefined : undefined}
+        inputLevel={isLiveRecording ? recorder.sourceActivityRms / Math.max(0.001, getRealtimeSilenceRms(settings) * 2.5) : undefined}
       />
       <TranscriptionSupportDialog
         isOpen={!recorder.isTranscriptionSupported}
@@ -347,7 +366,7 @@ function App() {
       />
       <PageStyleSheet settings={settings.pageStyle} />
       <SimpleSettings
-        disabled={recorder.isRecording}
+        disabled={recorder.isRecording || isBlocking}
         isOpen={isSettingsOpen}
         isOpfsAvailable={recorder.isOpfsRecordingAvailable}
         isSpeaking={speech.isSpeaking}
@@ -367,7 +386,7 @@ function App() {
         onUpdate={updateSettings}
       />
 
-      <div className="app-layout">
+      <div className="app-layout" aria-busy={isBlocking}>
         <header className="top-bar" aria-label="Application controls">
           <div className="hero-copy">
             <span className="hero-kicker">{statusLabel}</span>
@@ -391,7 +410,7 @@ function App() {
                 className="upload-button"
                 type="button"
                 onClick={() => mediaInputRef.current?.click()}
-                disabled={recorder.isRecording || recorder.isPreparing || recorder.isModelLoading}
+                disabled={recorder.isRecording || recorder.isPreparing || recorder.isModelLoading || recorder.isTranscribingMedia}
                 title="Upload media"
                 aria-label="Upload media"
               >
@@ -448,12 +467,6 @@ function App() {
             <div className="transcript-body">
               {transcriptBlocks.length > 0 ? (
                 <>
-                  {isBusyTranscribingMedia ? (
-                    <div className="transcript-busy-state" role="status" aria-live="polite">
-                      <div className="transcript-busy-spinner" aria-hidden="true" />
-                      <p>Transcription is running in the background. New text appears here as each chunk finishes.</p>
-                    </div>
-                  ) : null}
                   {transcriptBlocks.map((paragraph, index) => (
                     <div
                       key={`${index}-${paragraph.slice(0, 16)}`}
@@ -504,15 +517,10 @@ function App() {
                   ))}
                   <div ref={transcriptEndRef} className="transcript-end-anchor" aria-hidden="true" />
                 </>
-              ) : isBusyTranscribingMedia ? (
-                <div className="transcript-busy-state" role="status" aria-live="polite">
-                  <div className="transcript-busy-spinner" aria-hidden="true" />
-                  <p>Transcription is running in the background.</p>
-                </div>
               ) : (
                 <div className="empty-state">
                   <p className="empty">
-                    Press record for live speech, or upload media to transcribe an existing audio or video file.
+                    {isBusyTranscribingMedia ? "Your transcript will appear here as speech is processed." : "Press record for live speech, or upload media to transcribe an existing audio or video file."}
                   </p>
                 </div>
               )}
@@ -522,8 +530,6 @@ function App() {
                 <canvas ref={setSubtitleCanvas} className="subtitle-canvas" />
               </div>
             ) : null}
-            {!isBusyTranscribingMedia && recorder.progress ? <p className="progress">{recorder.progress}</p> : null}
-            {translation.status && (translation.enabled || translation.loading) ? <p className="progress" role="status">{translation.status}</p> : null}
             {recorder.error ? (
               <p className="error" role="alert">
                 {recorder.error}
@@ -550,9 +556,8 @@ function App() {
           </section>
 
           {playbackError ? <p role="alert" className="error">{playbackError}</p> : null}
-          {speech.speechStatus ? <p role="status" className="playback-status">{speech.speechStatus}</p> : null}
 
-          <div className="scroll-gadget" aria-label="Transcript controls">
+          <div className="transcript-controls" aria-label="Transcript controls">
             {!isBusyTranscribingMedia && playbackText ? (
               <div className="playback-gadget">
                 <button
@@ -604,56 +609,9 @@ function App() {
                 </label>
               </div>
             ) : null}
-            <div className="follow-gadget" aria-label="Transcript follow mode">
-              <label>Follow transcript</label>
-              <button
-                type="button"
-                className="scroll-toggle-button"
-                onClick={() => setIsAutoScrollEnabled((current) => !current)}
-                title={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
-                aria-label={isAutoScrollEnabled ? "Pause automatic transcript scrolling" : "Resume automatic transcript scrolling"}
-                aria-pressed={isAutoScrollEnabled}
-              >
-                {isAutoScrollEnabled ? <Pause size={16} /> : <Play size={16} />}
-                <span>{isAutoScrollEnabled ? "Auto" : "Manual"}</span>
-              </button>
-            </div>
           </div>
         </section>
       </div>
-
-      <div className="waveform-strip" aria-hidden="true">
-        <canvas ref={recorder.setWaveformCanvas} className="waveform-canvas" />
-      </div>
-
-      {recorder.isTranscribingMedia ? (
-        <div className="activity-dock progress-dock" role="status" aria-live="polite">
-          <div className="transcription-progress">
-            <div className="transcription-progress-heading">
-              <span className="transcription-progress-title">
-                <span className="transcription-progress-spinner" aria-hidden="true" />
-                <span>Transcribing media</span>
-              </span>
-              <span>{Math.round(recorder.mediaTranscriptionProgress)}%</span>
-            </div>
-            <p className="transcription-progress-message">
-              {recorder.progress || (recorder.mediaFileName ? `Preparing ${recorder.mediaFileName}...` : "Preparing media transcription...")}
-            </p>
-            <progress
-              value={Math.max(0, Math.min(100, recorder.mediaTranscriptionProgress))}
-              max={100}
-              aria-label="Uploaded media transcription progress"
-            />
-          </div>
-        </div>
-      ) : recorder.isRecording ? (
-        <div className="activity-dock">
-          <ActivityMeter
-            activityRms={recorder.sourceActivityRms}
-            silenceRms={getRealtimeSilenceRms(settings)}
-          />
-        </div>
-      ) : null}
     </main>
   );
 }

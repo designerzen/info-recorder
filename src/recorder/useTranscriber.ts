@@ -1071,6 +1071,7 @@ export function useTranscriber(settings: RuntimeSettings) {
       audioContextRef.current = audioContext;
       startAnalyser(stream, audioContext);
       await startMicrophonePcmCapture(stream, audioContext);
+      setRecordingStartedAt(Date.now());
 
       const mimeType = getSupportedMimeType();
       if (shouldRecordToOpfs && isOpfsRecordingAvailable) {
