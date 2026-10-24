@@ -1,10 +1,11 @@
 import { TranslationSettings } from "./components/TranslationSettings";
 import { useBrowserTranslation } from "./translation/useBrowserTranslation";
 import { createRoot } from "react-dom/client";
-import { Circle, FileText, Map, Play, SlidersHorizontal, Square, Upload } from "lucide-react";
+import { ArrowUpRight, AudioLines, Circle, FileAudio, FileText, LockKeyhole, Map, Mic, Play, ShieldCheck, SlidersHorizontal, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import "./styles.css";
+import "./studio.css";
 import { ActivityProgress } from "./components/ActivityProgress";
 import { PageStyleSheet } from "./components/PageStyleSheet";
 import { PhraseLocationMap, type PhraseLocationMapMessage } from "./components/PhraseLocationMap";
@@ -191,14 +192,14 @@ function App() {
       ? "Transcribing your media"
       : transcriptBlocks.length > 0
         ? "Transcript workspace"
-        : "Word Trail";
+        : "Your words, beautifully captured.";
   const heroDescription = isLiveRecording
     ? "The microphone is live. Your transcript will keep updating below as new speech arrives."
     : isBusyTranscribingMedia
       ? "Uploaded media is being processed locally. You can follow progress and review the transcript as chunks finish."
       : transcriptBlocks.length > 0
         ? "Review, play back, and follow the transcript from one focused workspace."
-        : "Record from the microphone or upload audio and video files for fast local transcription.";
+        : "A thought, a conversation, a moment worth keeping. Turn your audio into text, right here on your device.";
   const statusLabel = isLiveRecording
     ? "Live microphone"
     : isBusyTranscribingMedia
@@ -387,13 +388,41 @@ function App() {
       />
 
       <div className="app-layout" aria-busy={isBlocking}>
+        <div className="brand-bar">
+          <a className="brand" href={window.location.pathname} aria-label="Word Trail home">
+            <span className="brand-symbol"><AudioLines size={23} strokeWidth={1.8} /></span>
+            <span>word trail<span className="brand-period">.</span></span>
+          </a>
+          <div className="brand-actions">
+            <span className="privacy-badge"><ShieldCheck size={15} /> Private by nature</span>
+            <button className="settings-button" type="button" onClick={() => setIsSettingsOpen(true)} title="Settings" aria-label="Settings">
+              <SlidersHorizontal size={17} /><span>Settings</span>
+            </button>
+          </div>
+        </div>
         <header className="top-bar" aria-label="Application controls">
           <div className="hero-copy">
-            <span className="hero-kicker">{statusLabel}</span>
-            <h1>{heroTitle}</h1>
+            <span className="hero-kicker"><span /> A little space for your thoughts</span>
+            <h1>{heroTitle === "Your words, beautifully captured." ? <>Your words,<br /><em>beautifully captured.</em></> : heroTitle}</h1>
             <p>{heroDescription}</p>
           </div>
-          <div className="hero-actions">
+          <div className="hero-side-note" aria-hidden="true"><span className="note-line" />Less typing.<br />More being here.</div>
+        </header>
+
+        <div className="studio-layout">
+          <aside className="capture-panel" aria-label={aria.recorder}>
+            <div className="section-eyebrow"><span>01 / CAPTURE</span><Mic size={16} /></div>
+            <h2>Start with<br />a thought.</h2>
+            <p className="capture-description">Speak freely. We’ll take it from here.</p>
+            <div className="capture-visual" data-live={isLiveRecording}>
+              <div className="capture-wave" aria-hidden="true">
+                {[12, 20, 15, 32, 44, 28, 54, 38, 66, 46, 76, 54, 88, 62, 44, 72, 50, 34, 58, 40, 24, 36, 18, 26, 12].map((height, index) => (
+                  <span key={index} style={{ height: `${height}px`, animationDelay: `${index * 47}ms` }} />
+                ))}
+              </div>
+              <span className="capture-status"><span />{statusLabel}</span>
+            </div>
+            <div className="hero-actions">
             <div className="primary-actions">
               <button
                 className="record-button"
@@ -403,8 +432,8 @@ function App() {
                 title={recorder.isRecording ? "Stop recording" : "Start recording"}
                 aria-label={recorder.isRecording ? "Stop recording" : "Start recording"}
               >
-                {recorder.isRecording ? <Square size={28} /> : <Circle size={30} />}
-                <span>{recorder.isRecording ? "Stop recording" : recorder.isPreparing ? "Loading" : "Record"}</span>
+                {recorder.isRecording ? <Square size={16} /> : <Circle size={16} />}
+                <span>{recorder.isRecording ? "Stop recording" : recorder.isPreparing ? "Loading" : "Start recording"}</span>
               </button>
               <button
                 className="upload-button"
@@ -414,8 +443,9 @@ function App() {
                 title="Upload media"
                 aria-label="Upload media"
               >
-                <Upload size={20} />
+                <Upload size={17} />
                 <span>Upload media</span>
+                <ArrowUpRight size={15} className="upload-arrow" />
               </button>
               <input
                 ref={mediaInputRef}
@@ -425,20 +455,13 @@ function App() {
                 onChange={handleMediaInputChange}
               />
             </div>
-            <button
-              className="settings-button"
-              type="button"
-              onClick={() => setIsSettingsOpen(true)}
-              title="Settings"
-              aria-label="Settings"
-            >
-              <SlidersHorizontal size={20} />
-              <span>Settings</span>
-            </button>
-          </div>
-        </header>
+            </div>
+            <p className="file-hint"><FileAudio size={13} /> Audio & video files welcome</p>
+            <div className="capture-privacy"><LockKeyhole size={17} /><p><strong>Yours stays yours.</strong><span>Audio is processed on your device.<br />No uploads to a server.</span></p></div>
+          </aside>
 
         <section className="workspace-shell" aria-label="Transcript workspace">
+          <div className="workspace-heading">
           <div className="workspace-tabs" role="tablist" aria-label="Workspace view">
             {(["transcript", "map"] as const).map((view) => (
               <button
@@ -462,6 +485,8 @@ function App() {
                 {view === "map" ? "Map" : "Transcript"}
               </button>
             ))}
+          </div>
+          <span className="word-count">{playbackText ? playbackText.split(/\s+/).length.toLocaleString() : "0"} words</span>
           </div>
           <section ref={transcriptRef} id="transcript-panel" role="tabpanel" aria-labelledby="transcript-tab" hidden={workspaceView !== "transcript"} className="transcript" aria-label={aria.transcript}>
             <div className="transcript-body">
@@ -519,9 +544,16 @@ function App() {
                 </>
               ) : (
                 <div className="empty-state">
+                  <div className="paper-illustration" aria-hidden="true">
+                    <div className="paper-sheet"><span className="paper-label">a fresh page</span><i /><i /><i /><i /><span className="paper-spark">✳</span></div>
+                    <span className="paper-audio"><AudioLines size={25} strokeWidth={1.5} /></span>
+                  </div>
+                  <span className="empty-eyebrow">THE BEGINNING OF SOMETHING GOOD</span>
+                  <h2>Your next great thought<br />belongs here.</h2>
                   <p className="empty">
                     {isBusyTranscribingMedia ? "Your transcript will appear here as speech is processed." : "Press record for live speech, or upload media to transcribe an existing audio or video file."}
                   </p>
+                  <span className="empty-note"><span /> Ready when you are</span>
                 </div>
               )}
             </div>
@@ -610,7 +642,10 @@ function App() {
               </div>
             ) : null}
           </div>
+          <div className="workspace-footer"><span><LockKeyhole size={12} /> Only on your device</span><span>One word at a time.</span></div>
         </section>
+        </div>
+        <footer className="studio-footer"><span>A clear mind starts with a fresh page.</span><span>Made for the way you think.<span className="footer-star" aria-hidden="true">✳</span></span></footer>
       </div>
     </main>
   );

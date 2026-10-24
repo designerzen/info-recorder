@@ -19,12 +19,14 @@ export function PageStyleSheet({ settings }: PageStyleSheetProps) {
   const css = `
     :root {
       --page-text: ${pageText};
+      --display-font: ${settings.fontFamily === "'Public Sans', sans-serif" ? "'Literata', serif" : settings.fontFamily};
       --page-text-muted: ${pageTextMuted};
       --page-bg: ${settings.backgroundColor};
       --page-surface: ${settings.surfaceColor};
       --page-button: ${settings.buttonColor};
       --page-button-text: ${pageButtonText};
       --page-accent: ${settings.accentColor};
+      --accent-ink: ${getReadableTextColor(settings.accentColor)};
       --page-border: ${pageBorder};
       --focus-color: ${focusColor};
       --page-border-width: ${settings.borderWidth};

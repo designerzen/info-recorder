@@ -147,3 +147,9 @@ pnpm build
 ```
 
 The build runs TypeScript and creates the production Vite output.
+
+Run browser checks with `pnpm test:e2e`. Install the matching browser with
+`pnpm exec playwright install chromium` after installing or upgrading Playwright.
+If the browser download is unavailable, local Windows runs automatically use an
+installed Google Chrome browser. The test report names the browser used. CI
+continues to require Playwright's managed Chromium; it does not use this fallback.

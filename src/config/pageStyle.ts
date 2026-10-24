@@ -1,6 +1,6 @@
 export type RoleVerbosity = "minimal" | "standard" | "detailed";
 
-import { defaultTypeface, typefaceOptions } from "./typefaces";
+import { typefaceOptions } from "./typefaces";
 
 export type PageStyleSettings = {
   preset: string;
@@ -73,7 +73,7 @@ export const pageStyleOptions = {
 
 export const defaultPageStyle: PageStyleSettings = {
   preset: "light-mode",
-  fontFamily: defaultTypeface.value,
+  fontFamily: "'Public Sans', sans-serif",
   fontSizePt: "12pt",
   fontWeight: "normal",
   fontStyle: "normal",
@@ -81,25 +81,25 @@ export const defaultPageStyle: PageStyleSettings = {
   textDecoration: "none",
   letterSpacing: "normal",
   wordSpacing: "normal",
-  lineHeight: "1.35",
+  lineHeight: "1.5",
   textTransform: "none",
   pageShadow: "off",
   borderRadius: "6px",
-  borderWidth: "2px",
+  borderWidth: "1px",
   focusWidth: "3px",
   borderStyle: "solid",
   buttonRadius: "10px",
-  menuRadius: "4px",
+  menuRadius: "8px",
   labelRadius: "8px",
-  popupRadius: "8px",
-  textColor: "#13211b",
-  backgroundColor: "#f2f4ee",
+  popupRadius: "10px",
+  textColor: "#30332e",
+  backgroundColor: "#f7f6f2",
   surfaceColor: "#ffffff",
   buttonColor: "#ffffff",
-  buttonTextColor: "#13211b",
-  accentColor: "#15655a",
-  borderColor: "#cdd5c8",
-  focusColor: "#0f4a76",
+  buttonTextColor: "#30332e",
+  accentColor: "#a44732",
+  borderColor: "#dddcd5",
+  focusColor: "#a44732",
   roleVerbosity: "standard"
 };
 
