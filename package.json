@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "description": "Word Trail — private audio recording and on-device transcription.",
+  "author": "designerzen",
+  "main": "electron/main.cjs",
+  "packageManager": "pnpm@10.34.0",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
@@ -13,6 +17,13 @@
     "test:design": "playwright test tests/e2e/design-system.spec.ts",
     "test:all": "vitest run && playwright test",
     "preview": "vite preview --host 127.0.0.1",
+    "icons": "node scripts/generate-icons.mjs",
+    "desktop:dev": "node scripts/electron-dev.mjs",
+    "desktop:prepare": "pnpm build && node scripts/prepare-electron.mjs",
+    "desktop:pack": "pnpm desktop:prepare && electron-builder --config electron-builder.cjs --dir --publish never",
+    "desktop:build": "pnpm desktop:prepare && electron-builder --config electron-builder.cjs --publish never",
+    "test:desktop": "node --test tests/desktop/*.test.cjs",
+    "test:desktop:smoke": "node scripts/electron-smoke.mjs",
     "upgrader": "npx npm-check-updates --interactive -u"
   },
   "dependencies": {
