@@ -1,3 +1,4 @@
+import { mockRecorder } from "./helpers/recorderFixture";
 import { expect, test } from "@playwright/test";
 import { typefaceOptions } from "../../src/config/typefaces";
 import { auditButtons } from "./helpers/buttonContract";
@@ -14,6 +15,7 @@ for (const width of [1280, 390]) {
       // A cached font can return 304 on reload; only HTTP errors are failures.
       if (/\.(ttf|woff2)(\?|$)/.test(response.url()) && response.status() >= 400) fontFailures.push(response.url());
     });
+    await mockRecorder(page, { text: "A thought worth keeping." });
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("tab", { name: "Appearance", exact: true }).click();

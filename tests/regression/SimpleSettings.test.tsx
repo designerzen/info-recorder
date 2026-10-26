@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { h, Fragment } from "../../src/ui/dom";
+import { fireEvent, render, screen, within } from "../dom";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps } from "react";
+type ComponentProps<T extends (...args: any[]) => unknown> = Parameters<T>[0];
 import { describe, expect, it, vi } from "vitest";
 import { SimpleSettings } from "../../src/components/SimpleSettings";
 import {

@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { h, Fragment } from "../../src/ui/dom";
+import { fireEvent, render, screen, within } from "../dom";
 import { describe, expect, it, vi } from "vitest";
 import { TranslationSettings } from "../../src/components/TranslationSettings";
 import { cloneRuntimeSettings, defaultRuntimeSettings } from "../../src/config/settingsOptions";
-import type { useBrowserTranslation } from "../../src/translation/useBrowserTranslation";
+import type { createBrowserTranslation } from "../../src/translation/createBrowserTranslation";
 
-function renderSettings(overrides: Partial<ReturnType<typeof useBrowserTranslation>> = {}) {
+function renderSettings(overrides: Partial<ReturnType<typeof createBrowserTranslation>> = {}) {
   const translation = {
     supported: true, checking: false, enabled: false, loading: false, status: "",
     targets: [{ value: "fr", label: "French", availability: "downloadable" as const }],

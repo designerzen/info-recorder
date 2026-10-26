@@ -1,17 +1,17 @@
+import { mockRecorder } from "./helpers/recorderFixture";
 import { expect, test } from "@playwright/test";
 
 test.describe("info-recorder app", () => {
   test("renders the empty state and settings dialog", async ({ page }) => {
+    await mockRecorder(page);
     await page.goto("/");
 
     await expect(page.getByRole("button", { name: "Record" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Read the transcript aloud" })).toBeHidden();
     await expect(page.getByLabel("Transcript playback voice")).toBeHidden();
-    await expect(
-      page.getByText(
-        "Press record for live speech, or upload media to transcribe an existing audio or video file."
-      )
-    ).toBeVisible();
+    await expect(page.locator("button:visible")).toHaveCount(2);
+    await expect(page.getByLabel("Transcript workspace")).toBeHidden();
+    await page.evaluate(() => dispatchEvent(new Event("fixture:transcript")));
 
     await page.getByRole("button", { name: "Settings" }).click();
     await expect(page.getByLabel("Transcription model", { exact: true })).toHaveValue(
@@ -29,6 +29,7 @@ test.describe("info-recorder app", () => {
   });
 
   test("hydrates key settings from query parameters", async ({ page }) => {
+    await mockRecorder(page, { text: "A thought worth keeping." });
     await page.goto("/?activityDetection=1&vad=fixed-rms&recordingFormat=mp3&transcriptScrollSpeed=9");
 
     await page.getByRole("button", { name: "Settings" }).click();
@@ -62,6 +63,7 @@ test.describe("info-recorder app", () => {
       });
     });
 
+    await mockRecorder(page, { text: "A thought worth keeping." });
     await page.goto("/?transcriptionModel=wasm%3Abase.en-q5_1");
 
     await expect(page.getByRole("alertdialog", { name: "Browser upgrade required" })).toBeHidden();

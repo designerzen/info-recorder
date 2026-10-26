@@ -1,0 +1,56 @@
+/* Recording first; transcript tools appear only when they have content. */
+.compact-app {
+  --app-gutter: clamp(16px, 3vw, 32px);
+  padding: var(--app-gutter);
+}
+.compact-app .app-layout,
+.compact-app[data-recording="true"] .app-layout,
+.compact-app[data-has-content="false"] .app-layout {
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 16px;
+  height: calc(100dvh - var(--app-gutter) * 2);
+  min-height: 320px;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0;
+}
+.record-control { display: flex; flex-direction: column; align-items: center; gap: 12px; flex-shrink: 0; margin: clamp(48px, 8vh, 80px) 0 16px; }
+:root:root .compact-app .record-button {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max(112px, 7em);
+  height: auto;
+  aspect-ratio: 1;
+  min-width: 96px;
+  min-height: 96px;
+  padding: 12px;
+  font-size: max(1rem, 1em);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.compact-app .record-button > svg { width: 24px; height: 24px; }
+.compact-app .settings-button { position: absolute; inset: 0 0 auto auto; width: 44px; height: 44px; padding: 8px; }
+.compact-app .transcript { flex: 1 1 auto; min-height: 0; max-height: none; background: transparent; border: 0; box-shadow: none; border-radius: 0; padding: 8px; overflow-y: auto; font-size: 1.125em; line-height: 1.8; }
+.compact-app .transcript[hidden] { display: none; }
+.compact-app .transcript-paragraph { white-space: pre-wrap; }
+.compact-app .transcript-controls { flex-shrink: 0; padding: 0; }
+.compact-app .transcript-map { flex: 1 1 auto; min-height: 300px; overflow: auto; }
+.compact-app .playback-gadget { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: transparent; border: 0; }
+.compact-app .playback-select { width: auto; flex: 1; min-width: 0; }
+.compact-app .sentence-button:disabled { color: inherit; opacity: 1; cursor: text; }
+.compact-app .speech-button.playback-cta { min-height: 44px; }
+.compact-app .error { max-width: 40rem; }
+.record-status { max-width: 42ch; color: var(--ds-muted); font-size: 0.875em; text-align: center; }
+.transcription-download-footer { margin-top: auto; flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
+.transcript-download-menu { padding: 8px 0; border-top: 1px solid var(--studio-line); }
+.transcript-download-menu > summary { cursor: pointer; min-height: 44px; align-content: center; }
+.transcript-download-menu .transcript-downloads { margin: 8px 0 0; padding: 0; border: 0; background: transparent; }
+.transcript-download-menu .download-heading { margin: 0; }
+@media (max-width: 720px) {
+  .compact-app .app-layout { gap: 12px; }
+  .record-control { margin-top: 56px; }
+}

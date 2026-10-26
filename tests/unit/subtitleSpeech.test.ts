@@ -1,7 +1,7 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, mountService } from "../dom";
 import { describe, expect, it, vi } from "vitest";
 import type { TranscriptSentence } from "../../src/transcript/timedTranscript";
-import { getActiveTranscriptPosition, useSubtitleSpeech } from "../../src/speech/useSubtitleSpeech";
+import { getActiveTranscriptPosition, createSubtitleSpeech } from "../../src/speech/createSubtitleSpeech";
 import { cloneRuntimeSettings, defaultRuntimeSettings } from "../../src/config/settingsOptions";
 
 const transcriptSentences: TranscriptSentence[] = [
@@ -35,9 +35,7 @@ describe("playback volume", () => {
     const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     const settings = cloneRuntimeSettings(defaultRuntimeSettings);
     settings.tts.volume = volume;
-    const { result, unmount } = renderHook(() =>
-      useSubtitleSpeech("", transcriptSentences, settings.tts, vi.fn())
-    );
+    const { result, unmount } = mountService(createSubtitleSpeech("", transcriptSentences, settings.tts, vi.fn()));
     try {
       await act(async () => {
         await result.current.playSourceMedia({ url: "test.wav", kind: "audio" });
@@ -90,7 +88,7 @@ describe("map passage audio", () => {
     const createElement = vi.spyOn(document, "createElement");
     const settings = cloneRuntimeSettings(defaultRuntimeSettings);
     const passage = { ...transcriptSentences[1], words: [] };
-    const { result, unmount } = renderHook(() => useSubtitleSpeech("", [passage], settings.tts, vi.fn()));
+    const { result, unmount } = mountService(createSubtitleSpeech("", [passage], settings.tts, vi.fn()));
     act(() => result.current.playSentence(passage, { url: "recording.webm", kind: "audio" }, "source-audio"));
     const media = createElement.mock.results.find((entry) => entry.value instanceof HTMLMediaElement)?.value as HTMLMediaElement;
     await act(async () => media.dispatchEvent(new Event("loadedmetadata")));

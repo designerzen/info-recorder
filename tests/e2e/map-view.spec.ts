@@ -1,20 +1,15 @@
+import { mockRecorder } from "./helpers/recorderFixture";
 import { expect, test } from "@playwright/test";
 
 const text = "A recorded phrase with enough detail to be condensed into a preview on the map. Clicking the bubble reveals this entire passage and plays its matching audio.";
 const start = Date.parse("2026-10-22T12:00:00Z");
 const words = text.split(" ").map((word, index) => ({ text: word + " ", startMs: 1000 + index * 80, endMs: 1080 + index * 80 }));
 
-test("Map tab preserves the unknown-location fallback and keyboard navigation", async ({ page }) => {
+test("Map is hidden when a transcript has no locations", async ({ page }) => {
+  await mockRecorder(page, { text: "A thought worth keeping." });
   await page.goto("/");
-  const transcript = page.getByRole("tab", { name: "Transcript", exact: true });
-  await expect(transcript).toHaveAttribute("aria-selected", "true");
-  await transcript.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { name: "Map", exact: true })).toBeFocused();
-  await expect(page.getByText("Location unknown for this transcription", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Map", exact: true })).toHaveCount(0);
   await expect(page.locator(".phrase-map-tiles")).toHaveCount(0);
-  await page.keyboard.press("ArrowLeft");
-  await expect(transcript).toHaveAttribute("aria-selected", "true");
 });
 
 for (const viewport of [{ width: 1365, height: 1000 }, { width: 390, height: 844 }]) {
@@ -22,7 +17,7 @@ for (const viewport of [{ width: 1365, height: 1000 }, { width: 390, height: 844
     await page.setViewportSize(viewport);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.route("**/src/recorder/useTranscriber.ts*", (route) => route.fulfill({
+    await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({
       contentType: "application/javascript",
       body: `
         const noop = () => {};
@@ -41,7 +36,7 @@ for (const viewport of [{ width: 1365, height: 1000 }, { width: 390, height: 844
           },
           setWaveformCanvas:noop, start:noop, stop:noop
         };
-        export const useTranscriber = () => fixture;
+        fixture.update=noop; fixture.dispose=noop; fixture.subscribe=() => noop; export const createTranscriber = () => fixture;
       `
     }));
     await page.route("https://tile.openstreetmap.org/**", (route) => route.fulfill({

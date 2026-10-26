@@ -1,7 +1,10 @@
 # Word Trail: a quiet, AAA-first interface
 
-Word Trail makes capture feel simple and reading feel calm. Warm neutral surfaces,
-an editorial heading face, and one prominent capture action establish hierarchy.
+Word Trail starts with one Record button. It shows recording status only while
+working, the transcript only when text exists, and map controls only when there
+are located phrases. Playback, settings and downloads appear when they have
+content to act on. Download options stay collapsed until requested. There are no
+decorative headings, slogans, idle status panels or empty transcript gadgets.
 Plain verbs describe actions. Status includes text or a symbol; colour is never
 the only cue. Selected controls have an underline. Disabled controls keep readable
 labels and use dashed boundaries.

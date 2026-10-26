@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { h, Fragment } from "../../src/ui/dom";
+import { fireEvent, render, screen, waitFor } from "../dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptDownloads } from "../../src/components/TranscriptDownloads";
 import { downloadTranscriptBlob, exportTranscriptMedia, synthesizeTranscriptAudio } from "../../src/transcript/transcriptExport";
@@ -25,8 +26,8 @@ beforeEach(() => {
 describe("transcript download controls", () => {
   it("saves text while blocking audio during recording or transcription", () => {
     render(<TranscriptDownloads {...props} busy />);
-    expect(screen.getByRole("button", { name: "Download audio", exact: true })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Download captioned video" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Download audio", exact: true })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Download captioned video" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Download text" }));
     expect(downloadTranscriptBlob).toHaveBeenCalledWith(expect.any(Blob), "transcript.txt");
   });
@@ -51,13 +52,23 @@ describe("transcript download controls", () => {
     expect(props.getSourceMedia).not.toHaveBeenCalled();
   });
 
-  it("keeps original downloads available without WebGPU and explains missing timings", () => {
+  it("keeps original audio available and hides unavailable caption and TTS options", () => {
     Object.defineProperty(navigator, "gpu", { configurable: true, value: undefined });
     render(<TranscriptDownloads {...props} sentences={[]} />);
     expect(screen.getByRole("button", { name: "Download audio", exact: true })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Download captioned video" })).toBeDisabled();
-    expect(screen.getByText(/Original audio has no usable caption timestamps/)).toBeVisible();
-    expect(screen.getByRole("option", { name: "Supertonic Female 1" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Download captioned video" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Supertonic Female 1" })).toBeNull();
+  });
+
+  it("shows only text download while recording or when audio export is unavailable", () => {
+    const view = render(<TranscriptDownloads {...props} busy />);
+    expect(screen.getByRole("button", { name: "Download text" })).toBeVisible();
+    expect(screen.queryByLabelText("Audio source")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Download audio", exact: true })).toBeNull();
+    Object.defineProperty(navigator, "gpu", { configurable: true, value: undefined });
+    view.rerender(<TranscriptDownloads {...props} hasSourceAudio={false} />);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Download text" })).toBeVisible();
   });
 
   it("reports a failed export and allows retry", async () => {

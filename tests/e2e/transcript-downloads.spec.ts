@@ -7,13 +7,13 @@ const words = [
   { text: "Second ", startMs: 2000, endMs: 2300 }, { text: "phrase.", startMs: 2300, endMs: 2800 }
 ];
 
-async function fixture(page: Page) {
-  await page.route("**/src/recorder/useTranscriber.ts*", (route) => route.fulfill({
+async function fixture(page: Page, paused = false) {
+  await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({
     contentType: "application/javascript",
-    body: `const noop = () => {}; export const useTranscriber = () => ({
+    body: `const noop = () => {}; export const createTranscriber = () => ({ update:noop, dispose:noop, subscribe:() => noop,
       transcriptParagraphs:[{id:'p1',text:${JSON.stringify(text)},words:${JSON.stringify(words)}}],
       paragraphs:[${JSON.stringify(text)}], partialText:'',audioParts:[],sourceMedia:{url:'/export-fixture.wav',kind:'audio',fileName:'example.wav'},
-      opfsChunkCount:0,isRecording:false,isPreparing:false,isTranscribingMedia:false,isModelLoading:false,
+      opfsChunkCount:0,isRecording:${paused},isPaused:${paused},isPreparing:false,isTranscribingMedia:false,isModelLoading:false,
       isTranscriptionSupported:true,runtimeSupport:{},modelInventory:[],setWaveformCanvas:noop,start:noop,stop:noop
     });`
   }));
@@ -35,11 +35,20 @@ async function fixture(page: Page) {
   await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { configurable: true, value: {} }));
 }
 
+test("a paused recording exposes its available audio downloads", async ({ page }) => {
+  await fixture(page, true);
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Resume recording", exact: true })).toBeVisible();
+  await page.locator(".transcript-download-menu > summary").click();
+  await expect(page.getByRole("button", { name: "Download audio", exact: true })).toBeEnabled();
+});
+
 for (const width of [1365, 390]) {
   test(`downloads transcript text and presents audio options at ${width}px`, async ({ page }, testInfo) => {
     await fixture(page);
     await page.setViewportSize({ width, height: 1000 });
     await page.goto("/");
+    await page.locator(".transcript-download-menu > summary").click();
     const panel = page.getByRole("region", { name: "Transcript downloads" });
     await expect(panel).toBeVisible();
     const downloading = page.waitForEvent("download");

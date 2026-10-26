@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { h, Fragment } from "../../src/ui/dom";
+import { fireEvent, render, screen } from "../dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PhraseLocationMap, type PhraseLocationMapMessage } from "../../src/components/PhraseLocationMap";
 

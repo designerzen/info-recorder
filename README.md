@@ -44,7 +44,7 @@ http://127.0.0.1:5173/
 
 ### Desktop app and downloads
 
-Open **Downloads** in the app (`#downloads`) for platform choices, installation
+Open **Help → Desktop downloads** in Electron, or visit `#downloads` in the web app, for platform choices, installation
 guidance, and [GitHub Releases](https://github.com/designerzen/info-recorder/releases).
 The page uses the latest published release rather than hard-coded versioned URLs.
 Downloads become available after the first release is published.
@@ -115,6 +115,10 @@ checks secure context, cross-origin isolation, OPFS writes, model cache storage,
 shared-memory workers, AudioWorklet loading, sandbox preferences, and Downloads
 navigation. On headless Linux use `xvfb-run --auto-servernum pnpm test:desktop:smoke`.
 It does not record a microphone or download speech models.
+The release workflow runs these checks against each packaged executable.
+
+To check a packaged executable, run
+`node scripts/electron-smoke.mjs --executable "release/win-unpacked/Word Trail.exe"`.
 
 ### Recording
 
@@ -190,6 +194,7 @@ recordings/
 
 ## Implementation Notes
 
+- The UI uses native DOM elements and custom elements, with TypeScript state machines in `src/state/machine.ts`. JSX compiles to the local DOM factory; React and React DOM are not used. Recorder, playback, translation, and navigation transitions are explicit, while browser workers, audio, timers, and subscriptions belong to disposable services.
 - The default model is Moonshine Small Streaming English, selected for its live-speech latency/accuracy balance. Tiny and Medium Streaming are also available.
 - Moonshine runs through the official `moonshine-voice-wasm` v0.1.0 release, caches model assets through the Cache API, and returns word or line timing data through the same transcript path used by Whisper.
 - Settings retain all timestamp-capable Whisper ONNX exports and Whisper WASM GGML models. ONNX models provide word timestamps through `return_timestamps: "word"` chunks; WASM GGML models provide segment start/end timestamps from `@timur00kh/whisper.wasm`.

@@ -1,3 +1,4 @@
+import { mockRecorder } from "./helpers/recorderFixture";
 import { expect, test, type Page } from "@playwright/test";
 import { defaultPageStyle, encodePageStyle, pageStylePresets } from "../../src/config/pageStyle";
 import { auditButtons, assertButton, readButton } from "./helpers/buttonContract";
@@ -22,6 +23,7 @@ for (const width of [1280, 390]) {
       // Motion is tested separately. Real hover, pointer-down and keyboard focus
       // still occur; this keeps the full theme/state matrix deterministic.
       await page.emulateMedia({ reducedMotion: "reduce" });
+      await mockRecorder(page, { text: "A thought worth keeping." });
       await openTheme(page, settings);
       if (["Light Mode", "Dark Mode"].includes(name)) {
         await page.screenshot({ path: test.info().outputPath("studio.png"), fullPage: true });
@@ -50,10 +52,10 @@ async function transcriptFixture(page: Page, recording = false) {
       addEventListener() {}, removeEventListener() {}, cancel() {}, speak() {}
     } });
   });
-  await page.route("**/src/recorder/useTranscriber.ts*", (route) => route.fulfill({
+  await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({
     contentType: "application/javascript",
     body: `const noop = () => {};
-      export const useTranscriber = () => ({
+      export const createTranscriber = () => ({ update:noop, dispose:noop, subscribe:() => noop,
         transcriptParagraphs: [{id:'p1', text:'A thought worth keeping.', words:[
           {text:'A ',startMs:1000,endMs:1200},{text:'thought ',startMs:1200,endMs:1400},
           {text:'worth ',startMs:1400,endMs:1600},{text:'keeping.',startMs:1600,endMs:1800}
@@ -99,7 +101,7 @@ test("recording and disabled controls preserve the button contract", async ({ pa
   await page.emulateMedia({ reducedMotion: "reduce" });
   await transcriptFixture(page, true);
   await openTheme(page);
-  await expect(page.getByRole("button", { name: "Upload media", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Upload media", exact: true })).toHaveCount(0);
   await auditButtons(page, page.locator(".app-shell"));
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await auditButtons(page, page.getByRole("dialog"));
@@ -124,6 +126,7 @@ test("reduced motion and Windows forced colours retain usable buttons", async ({
 test("buttons reflow at 200% text size and a 320 CSS pixel viewport", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockRecorder(page, { text: "A thought worth keeping." });
   await openTheme(page);
   await page.addStyleTag({ content: "html { font-size: 200%; }" });
   await auditButtons(page, page.locator(".app-shell"), false);

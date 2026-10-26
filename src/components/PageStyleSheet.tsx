@@ -1,15 +1,13 @@
+import { h, Fragment } from "../ui/dom";
 import type { PageStyleSettings } from "../config/pageStyle";
-import { useMemo } from "react";
 import { createDesignTokens } from "../design/tokens";
-
 type PageStyleSheetProps = {
-  settings: PageStyleSettings;
+    settings: PageStyleSettings;
 };
-
 export function PageStyleSheet({ settings }: PageStyleSheetProps) {
-  const shadow = settings.pageShadow === "on" ? "0 16px 40px rgba(0, 0, 0, 0.18)" : "none";
-  const { tokens } = useMemo(() => createDesignTokens(settings), [settings]);
-  const css = `
+    const shadow = settings.pageShadow === "on" ? "0 16px 40px rgba(0, 0, 0, 0.18)" : "none";
+    const { tokens } = createDesignTokens(settings);
+    const css = `
     :root {
       ${Object.entries(tokens).map(([name, value]) => `${name}: ${value};`).join("\n      ")}
       color-scheme: var(--ds-scheme);
@@ -110,6 +108,5 @@ export function PageStyleSheet({ settings }: PageStyleSheetProps) {
       outline-width: var(--focus-width);
     }
   `;
-
-  return <style data-page-style>{css}</style>;
+    return <style data-page-style>{css}</style>;
 }

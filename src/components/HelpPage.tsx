@@ -1,13 +1,12 @@
-import { ArrowLeft } from "lucide-react";
-
+import { h, Fragment } from "../ui/dom";
+import { ArrowLeft } from "../ui/icons";
 export function HelpPage() {
-  return (
-    <article className="help-page" aria-labelledby="help-title">
+    return (<article className="help-page" aria-labelledby="help-title">
       <header className="help-intro">
         <span className="hero-kicker">A little guidance</span>
         <h1 id="help-title" tabIndex={-1}>Help with <em>Word Trail.</em></h1>
         <p>Turn spoken words into text. Record your microphone or choose an audio or video file, then read, listen to, and download your transcript. Audio transcription runs on your device.</p>
-        <a className="help-back" href="#recorder"><ArrowLeft size={18} aria-hidden="true" /> Back to recorder</a>
+        <a className="help-back" href="#recorder"><ArrowLeft size={18} aria-hidden="true"/> Back to recorder</a>
       </header>
 
       <div className="help-sections">
@@ -64,6 +63,5 @@ export function HelpPage() {
           </ul>
         </section>
       </div>
-    </article>
-  );
+    </article>);
 }

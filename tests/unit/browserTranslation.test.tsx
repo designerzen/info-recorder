@@ -1,7 +1,8 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { h, Fragment } from "../../src/ui/dom";
+import { act, mountService, waitFor } from "../dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTranslationTargets, type TranslatorApi } from "../../src/translation/browserTranslator";
-import { useBrowserTranslation } from "../../src/translation/useBrowserTranslation";
+import { createBrowserTranslation } from "../../src/translation/createBrowserTranslation";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -19,7 +20,7 @@ function mockApi() {
 describe("browser translation", () => {
   it("reports an unavailable browser without trying to download a model", () => {
     vi.stubGlobal("Translator", undefined);
-    const { result } = renderHook(() => useBrowserTranslation([], "en", "fr"));
+    const { result } = mountService(createBrowserTranslation([], "en", "fr"));
     expect(result.current.supported).toBe(false);
     expect(result.current.enabled).toBe(false);
   });
@@ -35,15 +36,13 @@ describe("browser translation", () => {
   it("starts only on enable, translates sentences, and cleans up on language change", async () => {
     const { api, instance } = mockApi();
     const sentences = [{ id: "one", text: "Hello." }];
-    const { result, rerender } = renderHook(({ target }) => useBrowserTranslation(sentences, "en", target), {
-      initialProps: { target: "fr" }
-    });
+    const { result } = mountService(createBrowserTranslation(sentences, "en", "fr"));
     await waitFor(() => expect(result.current.checking).toBe(false));
     expect(api.create).not.toHaveBeenCalled();
     await act(() => result.current.enable());
     await waitFor(() => expect(result.current.translations.one?.text).toBe("French: Hello."));
     expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ sourceLanguage: "en", targetLanguage: "fr" }));
-    rerender({ target: "de" });
+    result.current.update(sentences, "en", "de");
     expect(instance.destroy).toHaveBeenCalled();
     expect(result.current.enabled).toBe(false);
     expect(result.current.translations).toEqual({});
@@ -53,7 +52,7 @@ describe("browser translation", () => {
     const { api, instance } = mockApi();
     let finish!: (value: typeof instance) => void;
     api.create.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
-    const { result } = renderHook(() => useBrowserTranslation([], "en", "fr"));
+    const { result } = mountService(createBrowserTranslation([], "en", "fr"));
     let pending!: Promise<void>;
     act(() => { pending = result.current.enable(); });
     act(() => result.current.disable());
@@ -69,7 +68,7 @@ describe("browser translation", () => {
     };
     vi.stubGlobal("Translator", api);
     expect(await getTranslationTargets(api, "en")).toEqual([]);
-    const { result } = renderHook(() => useBrowserTranslation([], "en", "fr"));
+    const { result } = mountService(createBrowserTranslation([], "en", "fr"));
     await act(() => result.current.enable());
     expect(result.current.loading).toBe(false);
     expect(result.current.enabled).toBe(false);

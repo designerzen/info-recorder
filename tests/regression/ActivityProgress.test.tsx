@@ -1,4 +1,5 @@
-import { act, render, screen } from "@testing-library/react";
+import { h, Fragment } from "../../src/ui/dom";
+import { act, render, screen } from "../dom";
 import { expect, it, vi } from "vitest";
 import { ActivityProgress } from "../../src/components/ActivityProgress";
 

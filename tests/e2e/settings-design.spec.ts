@@ -1,7 +1,9 @@
+import { mockRecorder } from "./helpers/recorderFixture";
 import { expect, test } from "@playwright/test";
 
 test("settings keep actions visible and support keyboard navigation", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
+  await mockRecorder(page, { text: "A thought worth keeping." });
   await page.goto("/");
   const opener = page.getByRole("button", { name: "Settings", exact: true });
   await opener.click();
@@ -32,6 +34,7 @@ test("settings keep actions visible and support keyboard navigation", async ({ p
 for (const width of [320, 390]) {
   test(`settings fit a ${width}px screen in both tabs`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
+    await mockRecorder(page, { text: "A thought worth keeping." });
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     for (const name of ["App", "Appearance"]) {
