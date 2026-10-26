@@ -9,7 +9,9 @@ import "./studio.css";
 import "./settings.css";
 import "./design/system.css";
 import "./help.css";
+import "./releases.css";
 import { HelpPage } from "./components/HelpPage";
+import { ReleasesPage } from "./components/ReleasesPage";
 import { ActivityProgress } from "./components/ActivityProgress";
 import { PageStyleSheet } from "./components/PageStyleSheet";
 import { PhraseLocationMap, type PhraseLocationMapMessage } from "./components/PhraseLocationMap";
@@ -38,8 +40,10 @@ function App() {
   const [settings, setSettings] = useState(() => readSettingsFromUrl());
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isHelpPage, setIsHelpPage] = useState(() => window.location.hash === "#help");
-  const previousPageRef = useRef(isHelpPage);
+  const [currentPage, setCurrentPage] = useState(() => window.location.hash);
+  const isHelpPage = currentPage === '#help';
+  const isReleasesPage = currentPage === '#downloads';
+  const previousPageRef = useRef(currentPage);
   const [workspaceView, setWorkspaceView] = useState<"transcript" | "map">("transcript");
   const [playbackError, setPlaybackError] = useState("");
   const playbackRequestRef = useRef(0);
@@ -236,20 +240,20 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
-    const syncPage = () => setIsHelpPage(window.location.hash === "#help");
+    const syncPage = () => setCurrentPage(window.location.hash);
     window.addEventListener("hashchange", syncPage);
     return () => window.removeEventListener("hashchange", syncPage);
   }, []);
 
   useEffect(() => {
-    document.title = isHelpPage ? "Help — Word Trail" : "Word Trail — Your words, beautifully captured";
+    document.title = isHelpPage ? "Help — Word Trail" : isReleasesPage ? "Downloads — Word Trail" : "Word Trail — Your words, beautifully captured";
     // Move focus for in-app navigation; leave initial page focus to the browser.
-    if (previousPageRef.current !== isHelpPage) {
-      document.getElementById(isHelpPage ? "help-title" : "recorder-title")?.focus({ preventScroll: true });
+    if (previousPageRef.current !== currentPage) {
+      document.getElementById(isHelpPage ? "help-title" : isReleasesPage ? "releases-title" : "recorder-title")?.focus({ preventScroll: true });
     }
-    previousPageRef.current = isHelpPage;
+    previousPageRef.current = currentPage;
     window.scrollTo(0, 0);
-  }, [isHelpPage]);
+  }, [currentPage, isHelpPage, isReleasesPage]);
 
   useEffect(() => {
     const syncSettingsFromUrl = () => setSettings(readSettingsFromUrl());
@@ -419,13 +423,15 @@ function App() {
           <div className="brand-actions">
             <span className="privacy-badge"><ShieldCheck size={15} /> Private by nature</span>
             <a className="help-nav-link" href="#help" aria-current={isHelpPage ? "page" : undefined}>Help</a>
+            <a className="help-nav-link" href="#downloads" aria-current={isReleasesPage ? "page" : undefined}>Downloads</a>
             <button className="settings-button" type="button" onClick={() => setIsSettingsOpen(true)} title="Settings" aria-label="Settings">
               <SlidersHorizontal size={17} /><span>Settings</span>
             </button>
           </div>
         </div>
         {isHelpPage ? <HelpPage /> : null}
-        <div hidden={isHelpPage}>
+        {isReleasesPage ? <ReleasesPage /> : null}
+        <div hidden={isHelpPage || isReleasesPage}>
         <header className="top-bar" aria-label="Application controls">
           <div className="hero-copy">
             <span className="hero-kicker"><span /> A little space for your thoughts</span>

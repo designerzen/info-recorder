@@ -1,6 +1,6 @@
 # Info Recorder
 
-Info Recorder is a browser-only speech recorder and transcription prototype. It records microphone audio into the browser's Origin Private File System (OPFS), draws a live waveform, uses local voice activity detection to split speech into phrase parts, and transcribes speech on screen with Moonshine or Whisper.
+Word Trail (Info Recorder) is a speech recorder and transcription app for the browser and Electron desktop. It records microphone audio into the Origin Private File System (OPFS), draws a live waveform, uses local voice activity detection to split speech into phrase parts, and transcribes speech on screen with Moonshine or Whisper.
 
 No microphone audio is sent to an application server. Transcription runs client-side. On first use, the browser downloads the selected model files and stores them in browser-managed offline storage. Later runs reuse the cached files unless the user clears site data, changes browser profile or device, or changes models.
 
@@ -41,6 +41,82 @@ http://127.0.0.1:5173/
 ```
 
 ## Usage
+
+### Desktop app and downloads
+
+Open **Downloads** in the app (`#downloads`) for platform choices, installation
+guidance, and [GitHub Releases](https://github.com/designerzen/info-recorder/releases).
+The page uses the latest published release rather than hard-coded versioned URLs.
+Downloads become available after the first release is published.
+
+Use Node.js 24 and the pnpm version pinned in `package.json`. After `pnpm install`:
+
+```sh
+pnpm desktop:dev    # Vite + Electron, with hot reload
+pnpm desktop:pack   # Production app folder in release/, without an installer
+pnpm desktop:build  # Production installers for the current platform
+```
+
+The Windows build creates an NSIS installer; macOS creates DMG and ZIP files;
+Linux creates AppImage and Debian packages. macOS builds run on macOS and
+Windows builds run on Windows. The release workflow builds Windows/Linux x64
+and macOS x64/arm64 on native GitHub runners.
+
+The desktop renderer has no Node integration or preload bridge. A sandboxed,
+isolated Chromium renderer serves bundled assets from `wordtrail://app/`, with
+COOP/COEP headers for threaded WASM, OPFS, workers, and local model caches.
+Microphone and optional location access require approval. External web links
+open in your default browser. Recordings and model caches live in Electron's
+application profile, separately from the browser app. Development uses its own
+`Word Trail Development` profile. Models still need their initial download;
+WebGPU depends on the GPU/driver, and built-in browser translation may be absent.
+
+Only compiled web assets and the Electron shell are staged in `.desktop-app/`.
+Browser build dependencies and optional Node inference binaries are excluded.
+The build pipeline starts from `public/icon.svg`; run `pnpm icons` after editing
+it to regenerate ICO, ICNS, Linux PNGs, favicon assets, and the touch icon.
+Generated icons are committed, so local packaging does not require regeneration.
+
+### Creating a release
+
+1. Update `package.json`'s version and install to keep the lockfile current.
+2. Commit and push the changes, then push a matching tag, such as `v0.1.0`.
+3. **Desktop builds and release** tests and packages all four platform/architecture
+   combinations, uploads workflow artifacts, and creates a **draft GitHub release**
+   containing installers, SHA-256 checksums, installation guidance, and generated
+   change notes. A tag that differs from the package version fails the build.
+4. Review the draft in GitHub Releases and publish it. The Downloads page's latest
+   release link then resolves to that version. Update the Pages deployment as usual
+   by pushing to `main`.
+
+Manual workflow runs build downloadable workflow artifacts without creating a
+release. Relevant pull requests also build and test without release write access.
+Re-running a tag workflow reuses the release and replaces its matching assets.
+
+Current community builds are unsigned on Windows and ad-hoc signed on macOS,
+without notarization. SmartScreen/Gatekeeper may require approval or block them.
+Publisher signing needs your own certificates and credentials. To configure
+Developer ID signing, replace `mac.identity` in `electron-builder.cjs`, enable
+`mac.hardenedRuntime`, configure notarization with your Apple credentials, and
+provide signing secrets through GitHub Actions. Windows signing likewise needs a
+publisher certificate/service. Never commit signing credentials. Updates are
+installed manually; no background updater is configured.
+
+Desktop verification:
+
+```sh
+pnpm test:desktop
+pnpm desktop:prepare
+pnpm test:desktop:smoke
+```
+
+The smoke test launches the production renderer with a temporary profile and
+checks secure context, cross-origin isolation, OPFS writes, model cache storage,
+shared-memory workers, AudioWorklet loading, sandbox preferences, and Downloads
+navigation. On headless Linux use `xvfb-run --auto-servernum pnpm test:desktop:smoke`.
+It does not record a microphone or download speech models.
+
+### Recording
 
 1. Leave `Write timestamped MediaRecorder chunks to OPFS` enabled.
 2. Keep the default Moonshine Small Streaming model for live talk, or select another Moonshine/Whisper model in Settings.
