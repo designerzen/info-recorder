@@ -1,0 +1,104 @@
+name: Desktop builds and release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'electron/**'
+      - 'build/**'
+      - 'scripts/*electron*'
+      - 'scripts/generate-icons.mjs'
+      - 'scripts/release-checksums.mjs'
+      - 'tests/desktop/**'
+      - 'electron-builder.cjs'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/desktop-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest, platform: win, arch: x64, executable: 'release/win-unpacked/Word Trail.exe' }
+          - { runner: macos-15-intel, platform: mac, arch: x64, executable: 'release/mac/Word Trail.app/Contents/MacOS/Word Trail' }
+          - { runner: macos-15, platform: mac, arch: arm64, executable: 'release/mac-arm64/Word Trail.app/Contents/MacOS/Word Trail' }
+          - { runner: ubuntu-24.04, platform: linux, arch: x64, executable: 'release/linux-unpacked/word-trail' }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify release tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: node -e 'const p = require("./package.json"); if (process.env.GITHUB_REF_NAME !== `v${p.version}`) throw new Error("Tag must match package.json version");'
+      - run: pnpm test
+      - run: pnpm test:desktop
+      - run: pnpm icons
+      - run: pnpm desktop:prepare
+      - name: Package installers
+        run: pnpm exec electron-builder --config electron-builder.cjs --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke test the packaged executable
+        if: runner.os != 'Linux'
+        run: node scripts/electron-smoke.mjs --executable "${{ matrix.executable }}"
+      - name: Smoke test the packaged executable (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs --executable "${{ matrix.executable }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+
+  release:
+    name: Create draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release
+      - run: node scripts/release-checksums.mjs
+      - name: Create release page and upload installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Word Trail $RELEASE_TAG" --notes-file .github/RELEASE_NOTES.md --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" release/* --clobber

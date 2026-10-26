@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Word Trail</title>
+  <rect x="64" y="64" width="896" height="896" rx="256" fill="#a44732"/>
+  <path d="M320 448v128m96-240v352m96-432v512m96-352v192m96-128v64" fill="none" stroke="#faf8f4" stroke-width="48" stroke-linecap="round"/>
+  <circle cx="744" cy="768" r="32" fill="#e5ba7f"/>
+</svg>
