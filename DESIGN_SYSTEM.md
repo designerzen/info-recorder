@@ -123,6 +123,16 @@ to unconstrained surfaces or replace the palette measurement with a feature chec
 - Keep display typography for headings; use a readable sans face for controls.
   Respect larger font, spacing and typeface preferences. Wrap long control text.
 
+### Typeface choices
+
+Appearance offers 15 locally bundled typefaces, grouped by reading support,
+sans-serif, serif, and monospace. These include OpenDyslexic, Readex Pro, Lexend,
+Andika, Atkinson Hyperlegible and Next, plus four monospace choices. The
+[font inventory and licences](src/assets/fonts/README.md) document their sources.
+Descriptions and a live reading preview support personal choice. Font selection
+applies to the interface and subtitle family and survives URL reloads. Readex Pro
+and Lexend have upright styles; other newly bundled families include true italics.
+
 ## Verification and extending the system
 
 Run `pnpm test`, `pnpm test:e2e`, and `pnpm build`.

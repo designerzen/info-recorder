@@ -8,12 +8,32 @@ type ExportTarget = {
   args: string[];
 };
 
-const coreBaseUrl = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
+// FFmpeg runs in a module worker, so its core must expose an ESM default export.
+const coreBaseUrl = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
 let ffmpegPromise: Promise<FFmpeg> | null = null;
+let ffmpegQueue: Promise<unknown> = Promise.resolve();
+
+// The encoder and its virtual filesystem are shared by uploads and downloads.
+export function runFfmpegJob<T>(job: (ffmpeg: FFmpeg) => Promise<T>, onProgress?: (message: string) => void): Promise<T> {
+  const result = ffmpegQueue.then(async () => {
+    const ffmpeg = await getFfmpeg(onProgress);
+    const report = ({ progress }: { progress: number }) =>
+      onProgress?.(`Converting media ${Math.max(0, Math.min(100, Math.round(progress * 100)))}%`);
+    ffmpeg.on("progress", report);
+    try {
+      return await job(ffmpeg);
+    } finally {
+      ffmpeg.off("progress", report);
+      onProgress?.("");
+    }
+  });
+  ffmpegQueue = result.catch(() => undefined);
+  return result;
+}
 
 export function getRecordingExportExtension(format: RecordingExportFormat, sourceMimeType: string) {
   if (format === "native") return getNativeExtension(sourceMimeType);
-  return getExportTarget(format).extension;
+  return getRecordingExportTarget(format).extension;
 }
 
 export async function exportRecordingBlob(
@@ -24,20 +44,23 @@ export async function exportRecordingBlob(
   if (format === "native") return source;
 
   onProgress?.(`Preparing ${formatLabel(format)} export...`);
-  const ffmpeg = await getFfmpeg(onProgress);
-  const target = getExportTarget(format);
+  const target = getRecordingExportTarget(format);
   const inputName = `input.${getNativeExtension(source.type)}`;
   const outputName = `recording.${target.extension}`;
 
-  await ffmpeg.writeFile(inputName, await fetchFile(source));
-  onProgress?.(`Converting recording to ${formatLabel(format)}...`);
-  await ffmpeg.exec(["-i", inputName, "-vn", ...target.args, outputName]);
-  const output = await ffmpeg.readFile(outputName);
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-  onProgress?.("");
-
-  return new Blob([normalizeFileData(output)], { type: target.mimeType });
+  return runFfmpegJob(async (ffmpeg) => {
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(source));
+      onProgress?.(`Converting recording to ${formatLabel(format)}...`);
+      if (await ffmpeg.exec(["-y", "-i", inputName, "-vn", ...target.args, outputName]) !== 0) {
+        throw new Error("Unable to convert the recording. Please try another format.");
+      }
+      const output = await ffmpeg.readFile(outputName);
+      return new Blob([normalizeFileData(output)], { type: target.mimeType });
+    } finally {
+      await Promise.allSettled([ffmpeg.deleteFile(inputName), ffmpeg.deleteFile(outputName)]);
+    }
+  }, onProgress);
 }
 
 export async function extractAudioForTranscription(
@@ -47,55 +70,52 @@ export async function extractAudioForTranscription(
   onProgress?: (message: string) => void
 ) {
   onProgress?.("Preparing uploaded media audio...");
-  const ffmpeg = await getFfmpeg(onProgress);
   const inputName = `input.${getSourceExtension(sourceMimeType, sourceName)}`;
   const outputName = "transcription.wav";
 
-  await ffmpeg.writeFile(inputName, await fetchFile(source));
-  onProgress?.("Extracting audio track...");
-  await ffmpeg.exec([
-    "-i",
-    inputName,
-    "-vn",
-    "-ac",
-    "1",
-    "-ar",
-    "16000",
-    "-c:a",
-    "pcm_s16le",
-    outputName
-  ]);
-  const output = await ffmpeg.readFile(outputName);
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-  onProgress?.("");
-
-  return new Blob([normalizeFileData(output)], { type: "audio/wav" });
+  return runFfmpegJob(async (ffmpeg) => {
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(source));
+      onProgress?.("Extracting audio track...");
+      const exitCode = await ffmpeg.exec([
+        "-y", "-i", inputName, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", outputName
+      ]);
+      if (exitCode !== 0) throw new Error("Unable to extract an audio track from this media file.");
+      const output = await ffmpeg.readFile(outputName);
+      return new Blob([normalizeFileData(output)], { type: "audio/wav" });
+    } finally {
+      await Promise.allSettled([ffmpeg.deleteFile(inputName), ffmpeg.deleteFile(outputName)]);
+    }
+  }, onProgress);
 }
 
 function getFfmpeg(onProgress?: (message: string) => void) {
-  ffmpegPromise ??= loadFfmpeg(onProgress);
+  ffmpegPromise ??= loadFfmpeg(onProgress).catch((error) => {
+    ffmpegPromise = null;
+    throw error;
+  });
   return ffmpegPromise;
 }
 
 async function loadFfmpeg(onProgress?: (message: string) => void) {
   const ffmpeg = new FFmpeg();
-  ffmpeg.on("log", ({ message }) => {
-    if (message) onProgress?.(message);
-  });
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress?.(`Converting recording ${Math.max(0, Math.min(100, Math.round(progress * 100)))}%`);
-  });
-
   onProgress?.("Loading ffmpeg.wasm...");
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${coreBaseUrl}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${coreBaseUrl}/ffmpeg-core.wasm`, "application/wasm")
-  });
-  return ffmpeg;
+  const coreURL = await toBlobURL(`${coreBaseUrl}/ffmpeg-core.js`, "text/javascript");
+  let wasmURL: string | undefined;
+  try {
+    wasmURL = await toBlobURL(`${coreBaseUrl}/ffmpeg-core.wasm`, "application/wasm");
+    await ffmpeg.load({ coreURL, wasmURL });
+    return ffmpeg;
+  } catch (error) {
+    ffmpeg.terminate();
+    throw error;
+  } finally {
+    URL.revokeObjectURL(coreURL);
+    if (wasmURL) URL.revokeObjectURL(wasmURL);
+  }
 }
 
-function getExportTarget(format: Exclude<RecordingExportFormat, "native">): ExportTarget {
+export function getRecordingExportTarget(format: Exclude<RecordingExportFormat, "native">): ExportTarget {
   if (format === "ogg-vorbis") {
     return {
       extension: "ogg",

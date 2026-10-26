@@ -150,4 +150,40 @@ describe("SimpleSettings regressions", () => {
 
     expect(onReset).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps Done and reset available on the appearance tab", async () => {
+    const user = userEvent.setup();
+    const { props } = renderSettings();
+    await user.click(screen.getByRole("tab", { name: "Appearance" }));
+    expect(screen.getByRole("button", { name: "Reset settings" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports arrow navigation with a labelled tab panel", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    screen.getByRole("tab", { name: "App" }).focus();
+    await user.keyboard("{ArrowRight}");
+    const appearance = screen.getByRole("tab", { name: "Appearance" });
+    expect(appearance).toHaveFocus();
+    expect(appearance).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Appearance" })).toHaveAttribute("id", appearance.getAttribute("aria-controls"));
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("tab", { name: "App" })).toHaveFocus();
+  });
+
+  it("contains keyboard focus and closes with Escape", async () => {
+    const user = userEvent.setup();
+    const { props } = renderSettings();
+    const close = screen.getByRole("button", { name: "Close settings" });
+    const done = screen.getByRole("button", { name: "Done" });
+    expect(close).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(done).toHaveFocus();
+    await user.tab();
+    expect(close).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
 });

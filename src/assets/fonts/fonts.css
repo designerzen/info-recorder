@@ -1,4 +1,5 @@
 /* Generated local font faces for bundled app + subtitle fonts. */
+@import "./additional-fonts.css";
 
 @font-face {
   font-family: 'Atkinson Hyperlegible';

@@ -1,9 +1,10 @@
 import { Download, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
 import type { ReactNode } from "react";
-import { useRef } from "react";
+import { useId, useRef } from "react";
+import { getTypeface, typefaceGroups, typefaceOptions } from "../config/typefaces";
+import { paletteSteps } from "../design/tokens";
 import {
   defaultPageStyle,
-  fontFamilyOptions,
   normalizePageStyle,
   pageStyleOptions,
   pageStylePresets,
@@ -117,6 +118,8 @@ export function PageSettingsDialog({
 
 export function PageSettingsControls({ settings, onChange }: PageSettingsControlsProps) {
   const importRef = useRef<HTMLInputElement | null>(null);
+  const typefaceDescriptionId = useId();
+  const selectedTypeface = getTypeface(settings.fontFamily);
   const update = (patch: Partial<PageStyleSettings>) => {
     onChange({ ...settings, ...patch, preset: patch.preset ?? "custom" });
   };
@@ -143,18 +146,37 @@ export function PageSettingsControls({ settings, onChange }: PageSettingsControl
 
   return (
     <>
-      <label className="settings-control">
-        <span>Presets</span>
-        <select value={settings.preset} onChange={(event) => onChange(presetToPageStyle(event.target.value))}>
-          <option value="custom">Custom</option>
-          {pageStylePresets.map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-      </label>
-
+      <section className="appearance-preset" aria-label="Appearance preset">
+        <label className="settings-control">
+          <span>Presets</span>
+          <select value={settings.preset} onChange={(event) => onChange(presetToPageStyle(event.target.value))}>
+            <option value="custom">Custom</option>
+            {pageStylePresets.map((preset) => (
+              <option key={preset.value} value={preset.value}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="appearance-preview" aria-label="Reading preview">
+          <span>Reading preview</span>
+          <p style={{
+            fontFamily: settings.fontFamily,
+            fontSize: settings.fontSizePt,
+            fontWeight: settings.fontWeight,
+            fontStyle: settings.fontStyle,
+            lineHeight: settings.lineHeight,
+            letterSpacing: settings.letterSpacing,
+            wordSpacing: settings.wordSpacing,
+            textDecoration: settings.textDecoration,
+            textTransform: settings.textTransform,
+            fontVariant: settings.fontVariant
+          }}>A little space for every thought.</p>
+          <small>Your words, at your pace.</small>
+        </div>
+      </section>
+      <details className="appearance-preset-tools">
+        <summary>Preset tools <span>Save, import, or export your appearance</span></summary>
       <div className="page-settings-actions">
         <button
           type="button"
@@ -196,18 +218,22 @@ export function PageSettingsControls({ settings, onChange }: PageSettingsControl
           onChange={(event) => void importPreset(event.target.files?.[0])}
         />
       </div>
+      </details>
 
       <SettingsGroup title="Fonts">
         <label className="settings-control">
           <span>Typeface</span>
-          <select value={settings.fontFamily} onChange={(event) => update({ fontFamily: event.target.value })}>
-            {fontFamilyOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
+          <select aria-label="Typeface" value={settings.fontFamily} aria-describedby={typefaceDescriptionId} onChange={(event) => update({ fontFamily: event.target.value })}>
+            {typefaceGroups.map((group) => (
+              <optgroup key={group} label={group}>
+                {typefaceOptions.filter((option) => option.group === group).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>
+        <p id={typefaceDescriptionId} className="palette-description">{selectedTypeface.description} Font preferences vary; use the reading preview to choose what feels clearest. All fonts load from this app.</p>
         <SelectControl field={{ key: "fontSizePt", label: "Font size", options: pageStyleOptions.fontSizePt }} settings={settings} onChange={update} />
         <SelectControl field={{ key: "fontWeight", label: "Weight", options: pageStyleOptions.fontWeight }} settings={settings} onChange={update} />
         <SelectControl field={{ key: "fontStyle", label: "Style", options: pageStyleOptions.fontStyle }} settings={settings} onChange={update} />
@@ -236,20 +262,24 @@ export function PageSettingsControls({ settings, onChange }: PageSettingsControl
         <SelectControl field={{ key: "pageShadow", label: "Shadow", options: pageStyleOptions.pageShadow }} settings={settings} onChange={update} />
         <SelectControl field={{ key: "borderRadius", label: "Radius", options: pageStyleOptions.borderRadius }} settings={settings} onChange={update} />
         <SelectControl field={{ key: "borderWidth", label: "Border width", options: pageStyleOptions.borderWidth }} settings={settings} onChange={update} />
-        <SelectControl field={{ key: "focusWidth", label: "Focus width", options: pageStyleOptions.focusWidth }} settings={settings} onChange={update} />
+        <SelectControl field={{ key: "focusWidth", label: "Focus width", options: pageStyleOptions.focusWidth.filter((value) => parseInt(value) >= 3) }} settings={settings} onChange={update} />
         <SelectControl field={{ key: "borderStyle", label: "Border style", options: pageStyleOptions.borderStyle }} settings={settings} onChange={update} />
-        <ColorControl label="Text" value={settings.textColor} onChange={(textColor) => update({ textColor })} />
-        <ColorControl label="Background" value={settings.backgroundColor} onChange={(backgroundColor) => update({ backgroundColor })} />
-        <ColorControl label="Surface" value={settings.surfaceColor} onChange={(surfaceColor) => update({ surfaceColor })} />
-        <ColorControl label="Border" value={settings.borderColor} onChange={(borderColor) => update({ borderColor })} />
-        <ColorControl label="Focus" value={settings.focusColor} onChange={(focusColor) => update({ focusColor })} />
       </SettingsGroup>
 
       <SettingsGroup title="Button">
         <SelectControl field={{ key: "buttonRadius", label: "Radius", options: pageStyleOptions.componentRadius }} settings={settings} onChange={update} />
-        <ColorControl label="Color" value={settings.buttonColor} onChange={(buttonColor) => update({ buttonColor })} />
-        <ColorControl label="Text" value={settings.buttonTextColor} onChange={(buttonTextColor) => update({ buttonTextColor })} />
-        <ColorControl label="Accent" value={settings.accentColor} onChange={(accentColor) => update({ accentColor })} />
+        <p className="palette-description">Buttons keep a 44 × 44 pixel minimum target and 7:1 text contrast in every state.</p>
+      </SettingsGroup>
+
+      <SettingsGroup title="OKLCH palette">
+        <ColorControl label="Canvas seed" value={settings.backgroundColor} onChange={(backgroundColor) => update({ backgroundColor })} />
+        <ColorControl label="Brand seed" value={settings.accentColor} onChange={(accentColor) => update({ accentColor })} />
+        <p className="palette-description">Seeds generate 13 measured levels. Text, surfaces, borders and focus colours adapt together to preserve contrast. Dark canvas seeds select the dark palette.</p>
+        {(["neutral", "brand"] as const).map((family) => (
+          <div key={family} className="palette-preview" role="img" aria-label={`${family} palette, light to dark`}>
+            {paletteSteps.map(([level]) => <span key={level} title={`${family} ${level}`} style={{ background: `var(--ds-${family}-${level})` }} />)}
+          </div>
+        ))}
       </SettingsGroup>
 
       <SettingsGroup title="Menu">

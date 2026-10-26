@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "test:audio": "vitest run tests/unit/audioUtils.test.ts",
     "test:e2e": "playwright test",
+    "test:design": "playwright test tests/e2e/design-system.spec.ts",
     "test:all": "vitest run && playwright test",
     "preview": "vite preview --host 127.0.0.1",
     "upgrader": "npx npm-check-updates --interactive -u"

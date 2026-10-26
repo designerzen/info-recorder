@@ -6,6 +6,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import "./styles.css";
 import "./studio.css";
+import "./settings.css";
+import "./design/system.css";
+import "./help.css";
+import { HelpPage } from "./components/HelpPage";
 import { ActivityProgress } from "./components/ActivityProgress";
 import { PageStyleSheet } from "./components/PageStyleSheet";
 import { PhraseLocationMap, type PhraseLocationMapMessage } from "./components/PhraseLocationMap";
@@ -26,6 +30,7 @@ import { useSubtitleSpeech } from "./speech/useSubtitleSpeech";
 import { useJassubSubtitles } from "./subtitles/useJassubSubtitles";
 import { splitParagraphIntoSentences, type TranscriptSentence } from "./transcript/timedTranscript";
 import { locateTranscriptSentences } from "./transcript/locatedTranscript";
+import { TranscriptDownloads } from "./components/TranscriptDownloads";
 
 type TranscriptPlaybackChoice = "source:original" | "source:normalized" | `web:${string}` | `model:${string}`;
 
@@ -33,6 +38,8 @@ function App() {
   const [settings, setSettings] = useState(() => readSettingsFromUrl());
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isHelpPage, setIsHelpPage] = useState(() => window.location.hash === "#help");
+  const previousPageRef = useRef(isHelpPage);
   const [workspaceView, setWorkspaceView] = useState<"transcript" | "map">("transcript");
   const [playbackError, setPlaybackError] = useState("");
   const playbackRequestRef = useRef(0);
@@ -229,6 +236,22 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    const syncPage = () => setIsHelpPage(window.location.hash === "#help");
+    window.addEventListener("hashchange", syncPage);
+    return () => window.removeEventListener("hashchange", syncPage);
+  }, []);
+
+  useEffect(() => {
+    document.title = isHelpPage ? "Help — Word Trail" : "Word Trail — Your words, beautifully captured";
+    // Move focus for in-app navigation; leave initial page focus to the browser.
+    if (previousPageRef.current !== isHelpPage) {
+      document.getElementById(isHelpPage ? "help-title" : "recorder-title")?.focus({ preventScroll: true });
+    }
+    previousPageRef.current = isHelpPage;
+    window.scrollTo(0, 0);
+  }, [isHelpPage]);
+
+  useEffect(() => {
     const syncSettingsFromUrl = () => setSettings(readSettingsFromUrl());
     window.addEventListener("popstate", syncSettingsFromUrl);
     return () => window.removeEventListener("popstate", syncSettingsFromUrl);
@@ -360,7 +383,7 @@ function App() {
         inputLevel={isLiveRecording ? recorder.sourceActivityRms / Math.max(0.001, getRealtimeSilenceRms(settings) * 2.5) : undefined}
       />
       <TranscriptionSupportDialog
-        isOpen={!recorder.isTranscriptionSupported}
+        isOpen={!isHelpPage && !recorder.isTranscriptionSupported}
         requiresCrossOriginIsolation={recorder.requiresCrossOriginIsolation}
         requiresWebGpu={recorder.requiresWebGpu}
         support={recorder.runtimeSupport}
@@ -387,23 +410,26 @@ function App() {
         onUpdate={updateSettings}
       />
 
-      <div className="app-layout" aria-busy={isBlocking}>
+      <div className="app-layout" aria-busy={isBlocking} inert={isSettingsOpen}>
         <div className="brand-bar">
-          <a className="brand" href={window.location.pathname} aria-label="Word Trail home">
+          <a className="brand" href="#recorder" aria-label="Word Trail home">
             <span className="brand-symbol"><AudioLines size={23} strokeWidth={1.8} /></span>
             <span>word trail<span className="brand-period">.</span></span>
           </a>
           <div className="brand-actions">
             <span className="privacy-badge"><ShieldCheck size={15} /> Private by nature</span>
+            <a className="help-nav-link" href="#help" aria-current={isHelpPage ? "page" : undefined}>Help</a>
             <button className="settings-button" type="button" onClick={() => setIsSettingsOpen(true)} title="Settings" aria-label="Settings">
               <SlidersHorizontal size={17} /><span>Settings</span>
             </button>
           </div>
         </div>
+        {isHelpPage ? <HelpPage /> : null}
+        <div hidden={isHelpPage}>
         <header className="top-bar" aria-label="Application controls">
           <div className="hero-copy">
             <span className="hero-kicker"><span /> A little space for your thoughts</span>
-            <h1>{heroTitle === "Your words, beautifully captured." ? <>Your words,<br /><em>beautifully captured.</em></> : heroTitle}</h1>
+            <h1 id="recorder-title" tabIndex={-1}>{heroTitle === "Your words, beautifully captured." ? <>Your words,<br /><em>beautifully captured.</em></> : heroTitle}</h1>
             <p>{heroDescription}</p>
           </div>
           <div className="hero-side-note" aria-hidden="true"><span className="note-line" />Less typing.<br />More being here.</div>
@@ -642,10 +668,18 @@ function App() {
               </div>
             ) : null}
           </div>
+          <TranscriptDownloads
+            text={playbackText}
+            sentences={transcriptSentences}
+            hasSourceAudio={hasSourceAudio}
+            getSourceMedia={async () => recorder.sourceMedia ?? await recorder.getRecordingSourceMedia()}
+            busy={recorder.isRecording || recorder.isPreparing || isBusyTranscribingMedia || isBlocking}
+          />
           <div className="workspace-footer"><span><LockKeyhole size={12} /> Only on your device</span><span>One word at a time.</span></div>
         </section>
         </div>
         <footer className="studio-footer"><span>A clear mind starts with a fresh page.</span><span>Made for the way you think.<span className="footer-star" aria-hidden="true">✳</span></span></footer>
+        </div>
       </div>
     </main>
   );

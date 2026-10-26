@@ -22,7 +22,7 @@ export default defineConfig({
     trace: "on-first-retry"
   },
   webServer: {
-    command: "node_modules\\.bin\\vite.cmd --host 127.0.0.1 --port 4173 --strictPort",
+    command: "node_modules\\.bin\\vite.cmd --mode e2e --host 127.0.0.1 --port 4173 --strictPort",
     port: 4173,
     reuseExistingServer: true,
     timeout: 120_000

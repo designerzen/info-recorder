@@ -1,5 +1,5 @@
-import { RotateCcw, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Check, Mic, Palette, RotateCcw, SlidersHorizontal, Volume2, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { PageSettingsControls } from "./PageSettingsDialog";
 import type { PageStyleSettings } from "../config/pageStyle";
 import {
@@ -67,49 +67,108 @@ export function SimpleSettings({
   const sentencePlaybackModeOption = getOption("sentencePlaybackMode");
   const volumeOption = getOption("speechVolume");
   const [activeTab, setActiveTab] = useState<"app" | "appearance">("app");
+  const dialogRef = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const settingsId = useId();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [activeTab]);
+
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("*") ?? [])
+      .filter((element) => element.matches('button:not(:disabled), select:not(:disabled), input:not(:disabled), summary, [tabindex="0"]') &&
+      element.getAttribute("tabindex") !== "-1" && !element.classList.contains("media-input") &&
+      (!element.closest("details:not([open])") || element.tagName === "SUMMARY"));
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  };
 
   if (!isOpen) return null;
 
   return (
     <div className="settings-overlay" role="presentation">
       <section
+        ref={dialogRef}
         aria-label="User settings"
+        aria-describedby={`${settingsId}-description`}
         aria-modal="true"
         className="settings-dialog"
         role="dialog"
+        onKeyDown={handleDialogKeyDown}
       >
         <header className="settings-dialog-header">
           <div>
             <h2>Settings</h2>
-            <p>Set up recording, playback, and appearance.</p>
+            <p id={`${settingsId}-description`}>Make Word Trail work for you.</p>
           </div>
           <button type="button" onClick={onClose} title="Close settings" aria-label="Close settings">
             <X size={18} />
           </button>
         </header>
-        <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        <div className="settings-tabs" role="tablist" aria-label="Settings sections"
+          onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const next = event.key === "Home" ? "app" : event.key === "End" ? "appearance" : activeTab === "app" ? "appearance" : "app";
+            setActiveTab(next);
+            document.getElementById(`${settingsId}-${next}-tab`)?.focus();
+          }}>
           <button
             type="button"
             role="tab"
+            id={`${settingsId}-app-tab`}
+            aria-controls={`${settingsId}-app-panel`}
+            aria-label="App"
+            tabIndex={activeTab === "app" ? 0 : -1}
             aria-selected={activeTab === "app"}
             className={activeTab === "app" ? "active" : ""}
             onClick={() => setActiveTab("app")}
           >
-            App
+            <SlidersHorizontal size={17} aria-hidden="true" /> App
           </button>
           <button
             type="button"
             role="tab"
+            id={`${settingsId}-appearance-tab`}
+            aria-controls={`${settingsId}-appearance-panel`}
+            tabIndex={activeTab === "appearance" ? 0 : -1}
             aria-selected={activeTab === "appearance"}
             className={activeTab === "appearance" ? "active" : ""}
             onClick={() => setActiveTab("appearance")}
           >
-            Appearance
+            <Palette size={17} aria-hidden="true" /> Appearance
           </button>
         </div>
         {activeTab === "app" ? (
-          <div className="settings-body settings-app-body" role="tabpanel">
-            <SettingsGroup title="Recording">
+          <div ref={bodyRef} id={`${settingsId}-app-panel`} aria-labelledby={`${settingsId}-app-tab`} tabIndex={0} className="settings-body settings-app-body" role="tabpanel">
+            {disabled ? <p className="settings-notice" role="status">Stop recording or wait for processing to change recording settings.</p> : null}
+            <SettingsGroup title="Recording" description="Choose how you capture and transcribe audio." icon={<Mic size={18} aria-hidden="true" />}>
               <SettingControl
                 disabled={disabled}
                 modelDownloadSpeedBps={modelDownloadSpeedBps}
@@ -159,16 +218,19 @@ export function SimpleSettings({
               ) : null}
               <label className="settings-control checkbox-control">
                 <input
+                  aria-label="Save audio chunks"
+                  aria-describedby={`${settingsId}-storage-description`}
                   type="checkbox"
                   checked={settings.recording.shouldRecordToOpfs && isOpfsAvailable}
                   disabled={disabled || !isOpfsAvailable}
                   onChange={(event) => onUpdate(recordOption, event.target.checked)}
                 />
-                <span>Save audio chunks</span>
+                <span>Save audio chunks<small id={`${settingsId}-storage-description`}>{isOpfsAvailable ? "Keep a local copy in this browser for playback and download." : "Audio storage is unavailable in this browser."}</small></span>
               </label>
             </SettingsGroup>
             {translationControls}
-        <SettingsGroup title="Playback">
+            <SettingsGroup title="Playback" description="Adjust listening volume, voices, and transcript movement." icon={<Volume2 size={18} aria-hidden="true" />}>
+              {isSpeaking ? <p className="settings-hint settings-wide" role="status">Stop playback to change volume and voice settings.</p> : null}
               <div className="volume-settings">
                 <SettingControl disabled={isSpeaking} option={volumeOption} settings={settings} onUpdate={onUpdate} />
                 <div className="volume-presets" role="group" aria-label="Volume presets">
@@ -184,7 +246,7 @@ export function SimpleSettings({
                     </button>
                   ))}
                 </div>
-                <p className="settings-hint">Applies to speech and source audio. Stop playback to change volume.</p>
+                <p className="settings-hint">Applies to speech and source audio.</p>
               </div>
               <SettingControl
                 disabled={disabled}
@@ -225,7 +287,7 @@ export function SimpleSettings({
               </label>
             </SettingsGroup>
             <details className="advanced-settings">
-              <summary>Advanced settings</summary>
+              <summary><span>Advanced settings<small>Fine-tune audio processing, timing, and speech.</small></span></summary>
               <div className="advanced-grid">
                 {settingsOptions
                   .filter(
@@ -255,28 +317,33 @@ export function SimpleSettings({
                   ))}
               </div>
             </details>
-            <footer className="settings-footer">
-              <button type="button" onClick={onReset} disabled={disabled} title="Reset settings">
-                <RotateCcw size={18} />
-                <span>Reset settings</span>
-              </button>
-              <button type="button" onClick={onClose}>Done</button>
-            </footer>
           </div>
         ) : (
-          <div className="settings-body page-settings-main" role="tabpanel">
+          <div ref={bodyRef} id={`${settingsId}-appearance-panel`} aria-labelledby={`${settingsId}-appearance-tab`} tabIndex={0} className="settings-body page-settings-main" role="tabpanel">
+            <div className="settings-section-intro"><h3>Appearance</h3><p>Start with a preset, then adjust the details for comfortable reading.</p></div>
             <PageSettingsControls settings={settings.pageStyle} onChange={onSetPageStyle} />
           </div>
         )}
+        <footer className="settings-footer">
+          <button className="settings-reset" type="button" onClick={onReset} disabled={disabled} title="Reset settings">
+            <RotateCcw size={16} aria-hidden="true" />
+            <span>Reset settings</span>
+          </button>
+          <div className="settings-footer-end">
+            <span className="settings-autosave"><Check size={14} aria-hidden="true" /> Changes apply immediately</span>
+            <button className="settings-done" data-intent="primary" type="button" onClick={onClose}>Done</button>
+          </div>
+        </footer>
       </section>
     </div>
   );
 }
 
-function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
+function SettingsGroup({ title, description, icon, children }: { title: string; description?: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <fieldset className="settings-group">
-      <legend>{title}</legend>
+      <legend>{icon}{title}</legend>
+      {description ? <p className="settings-group-description">{description}</p> : null}
       <div className="settings-group-grid">{children}</div>
     </fieldset>
   );

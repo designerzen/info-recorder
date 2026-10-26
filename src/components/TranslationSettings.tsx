@@ -15,6 +15,7 @@ export function TranslationSettings({ settings, translation, onUpdate }: {
   return (
     <fieldset className="settings-group">
       <legend>Translation</legend>
+      <p className="settings-group-description">Read your transcript in another language using browser translation.</p>
       <div className="settings-group-grid">
         <label className="settings-control checkbox-control">
           <input type="checkbox" checked={translation.enabled || translation.loading}

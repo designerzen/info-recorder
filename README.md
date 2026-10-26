@@ -51,6 +51,22 @@ http://127.0.0.1:5173/
 7. Press `Stop`.
 8. Use `Download Full Audio` for the whole recording, or the per-part buttons for phrase-level audio.
 
+The download panel below the transcript saves the displayed transcript as UTF-8
+text, or exports the original recording or a local Supertonic TTS voice as MP3,
+WAV, FLAC, Ogg Opus, or Ogg Vorbis. Speed (0.5–2×) and pitch (−12 to +12
+semitones) are independent export controls. Audio downloads become available
+when recording/transcription finishes; text can be saved while it is arriving.
+Browser system voices support playback; downloadable TTS uses the local model
+voices and requires WebGPU.
+
+`Download captioned video` produces an MP4 with a plain background, the selected
+audio, and a switchable `mov_text` closed-caption track. Enable captions in a
+compatible player. Original-audio captions use recognition timestamps; generated
+speech captions use each synthesized phrase's measured sample duration. Caption
+times follow the export speed. Recordings without usable timestamps can still
+export audio, or use a TTS voice to generate new timed captions. These exports
+run locally with ffmpeg.wasm, which downloads its encoder on first use.
+
 ## Settings
 
 Settings → Translation offers optional browser translation when the browser exposes
@@ -141,6 +157,10 @@ The browser downloads those static model/config/style assets on first Supertonic
 The model assets are distributed by Supertone under the license published in the Hugging Face model repository. Large ONNX files should not be committed to this repo; GitHub rejects normal Git blobs over 100 MB.
 
 ## Verification
+
+The [design system](DESIGN_SYSTEM.md) defines the OKLCH palette, AAA-first contrast
+rules, button contract, interaction states, and their automated browser checks.
+Run `pnpm test:design` for the theme and button accessibility matrix.
 
 ```sh
 pnpm build
