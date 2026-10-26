@@ -1,0 +1,211 @@
+/* Public contract. Palette recipes and semantic aliases live in tokens.ts.
+   Components use semantic roles, never hand-picked shades or alpha labels. */
+:root {
+  --ds-space-1: 4px;
+  --ds-space-2: 8px;
+  --ds-space-3: 12px;
+  --ds-space-4: 16px;
+  --ds-space-6: 24px;
+  --ds-space-8: 32px;
+  --ds-target: 44px;
+  --ds-radius-control: 10px;
+  --ds-radius-panel: 16px;
+  --ds-motion: 140ms;
+  --studio-line: color-mix(in oklch, var(--ds-border) 35%, var(--ds-surface));
+  --studio-tint: var(--ds-tint);
+}
+
+html { scroll-padding-block: 24px 100px; }
+.app-shell { padding-bottom: env(safe-area-inset-bottom); }
+.brand-symbol { background: var(--ds-primary-rest); color: var(--ds-primary-ink); }
+.hero-copy h1 em, .brand-period { color: var(--ds-accent-text); }
+.hero-copy p, .capture-description, .empty-state .empty { font-size: max(1rem, 1em); line-height: 1.7; }
+.hero-kicker, .section-eyebrow, .capture-status, .empty-eyebrow, .file-hint,
+.privacy-badge, .word-count, .workspace-footer, .studio-footer, .empty-note,
+.capture-privacy p, .settings-hint, .model-select-details, .settings-control span,
+.activity-progress-panel .activity-progress p, .activity-progress-panel .activity-progress-heading {
+  font-size: max(0.875rem, 0.875em);
+  line-height: 1.5;
+  color: var(--ds-muted);
+}
+.capture-status > span, .empty-note > span, .activity-progress-panel .activity-progress-symbol { background: var(--ds-accent-text); }
+.settings-dialog-header p, .playback-picker-description, .playback-picker-label { font-size: 0.875rem; color: var(--ds-muted); }
+.capture-panel, .workspace-shell, .settings-dialog { border-radius: var(--ds-radius-panel); }
+.workspace-heading, .workspace-footer { padding-inline: var(--ds-space-4); }
+.workspace-tabs { gap: var(--ds-space-2); padding-block: var(--ds-space-2); }
+.primary-actions, .volume-presets, .page-settings-actions, .settings-tabs { gap: var(--ds-space-2); }
+.capture-panel { padding: var(--ds-space-6); }
+.capture-wave { height: 100px; }
+.studio-layout { grid-template-columns: minmax(310px, 360px) minmax(0, 1fr); }
+.workspace-shell { overflow: visible; }
+.workspace-heading { border-radius: var(--ds-radius-panel) var(--ds-radius-panel) 0 0; }
+.transcript { scroll-padding: 12px; }
+.transcript-controls { padding: var(--ds-space-4); }
+.playback-gadget { overflow: visible; }
+.settings-dialog, .page-settings-dialog { scroll-padding: var(--ds-space-4); }
+
+/* Deliberately outranks the legacy component styles and imported presets.
+   All buttons, including inline phrases and icon controls, have the same floor. */
+:root:root .app-shell :is(button, [role="button"]) {
+  --ds-button-bg: var(--ds-control-rest);
+  --ds-button-hover: var(--ds-control-hover);
+  --ds-button-pressed: var(--ds-control-pressed);
+  --ds-button-ink: var(--ds-control-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-2);
+  box-sizing: border-box;
+  min-width: var(--ds-target);
+  min-height: var(--ds-target);
+  height: auto;
+  max-width: 100%;
+  padding: var(--ds-space-2) var(--ds-space-4);
+  border: 1px solid var(--ds-border);
+  border-radius: max(8px, var(--button-radius));
+  background: var(--ds-button-bg);
+  color: var(--ds-button-ink);
+  font-size: max(1rem, 1em);
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: inherit;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 1;
+  filter: none;
+  box-shadow: none;
+  touch-action: manipulation;
+  scroll-margin: 12px;
+  transition: background-color var(--ds-motion) ease, transform var(--ds-motion) ease;
+}
+
+:root:root .app-shell :is(button, [role="button"]):is(.record-button, .primary, [data-intent="primary"]) {
+  --ds-button-bg: var(--ds-primary-rest);
+  --ds-button-hover: var(--ds-primary-hover);
+  --ds-button-pressed: var(--ds-primary-pressed);
+  --ds-button-ink: var(--ds-primary-ink);
+  border-color: var(--ds-button-bg);
+}
+
+:root:root .app-shell :is(button, [role="button"]):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--ds-button-hover);
+  box-shadow: none;
+  filter: none;
+}
+
+:root:root .app-shell :is(button, [role="button"]):active:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--ds-button-pressed);
+  transform: translateY(1px);
+}
+
+/* Selected state has a shape cue as well as colour. */
+:root:root .app-shell button:is([aria-selected="true"], [aria-pressed="true"], .sentence-button.active) {
+  --ds-button-bg: var(--ds-selected);
+  --ds-button-ink: var(--ds-text);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+/* Disabled labels keep AAA contrast (a stricter house rule than WCAG requires).
+   Dashed boundaries and the native disabled state communicate availability. */
+:root:root .app-shell :is(button, [role="button"]):is(:disabled, [aria-disabled="true"]) {
+  --ds-button-bg: var(--ds-control-rest);
+  --ds-button-ink: var(--ds-control-ink);
+  border-style: dashed;
+  border-color: var(--ds-border);
+  opacity: 1;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* A 3px perimeter exceeds WCAG 2.4.13's 2px area. The offset separates
+   the ring from coloured fills; its colour is checked on surrounding surfaces. */
+:root:root .app-shell :is(button, [role="button"]):focus-visible {
+  outline: var(--focus-width) solid var(--ds-focus);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+
+:root:root .app-shell button :is(span, small, strong) {
+  color: inherit;
+  opacity: 1;
+}
+.playback-cta-copy { text-align: left; }
+.playback-cta-copy strong, .playback-cta-copy small { font-size: 1em; white-space: normal; }
+.playback-cta-icon { background: transparent; border: 0; }
+.phrase-map-bubble { background: transparent; border: 0; box-shadow: none; padding: 0; font-size: 1em; line-height: 1.5; }
+.phrase-map-bubble-kicker { font-size: 0.875em; }
+.phrase-map-message[aria-expanded="true"] .phrase-map-bubble,
+.phrase-map-message[data-playing="true"] .phrase-map-bubble { background: transparent; border: 0; }
+.phrase-map-controls { gap: 8px; padding: 8px; background: var(--ds-surface); border-radius: var(--ds-radius-control); }
+.phrase-map-message-list { padding: 8px; gap: 8px; width: min(280px, calc(100vw - 6rem)); background: var(--ds-surface); border-radius: 12px; scroll-padding: 8px; }
+:root:root .app-shell .sentence-button { display: inline-block; text-align: start; margin: 4px; padding: 6px 8px; }
+.sentence-word.active { background: var(--ds-primary-rest); color: var(--ds-primary-ink) !important; }
+
+/* Progressive enhancement. The old color-contrast() spelling is not a
+   baseline dependency. tokens.ts measures every fallback at >=7:1 first. */
+@supports (color: contrast-color(white)) {
+  :root:root .app-shell button:is(.record-button, .primary, [data-intent="primary"]):not(:disabled) {
+    color: contrast-color(var(--ds-button-bg));
+  }
+}
+@supports (color: color-contrast(white vs black, white to 7)) {
+  :root:root .app-shell button {
+    color: color-contrast(var(--ds-button-bg) vs var(--ds-button-ink), black, white to 7);
+  }
+}
+
+:root:root .app-shell :is(select, input[type="number"]) {
+  min-height: var(--ds-target);
+  font-size: max(1rem, 1em);
+  background: var(--ds-surface);
+  color: var(--ds-text);
+  border: 1px solid var(--ds-border);
+}
+:root:root .app-shell :is(input, select, summary, a):focus-visible {
+  outline: var(--focus-width) solid var(--ds-focus);
+  outline-offset: 3px;
+}
+.palette-preview { display: grid; gap: 4px; grid-template-columns: repeat(13, minmax(0, 1fr)); grid-column: 1 / -1; }
+.palette-preview > span { min-height: 32px; border-radius: 4px; border: 1px solid var(--studio-line); }
+.palette-description { grid-column: 1 / -1; font-size: 0.875rem; color: var(--ds-muted); line-height: 1.5; }
+
+@media (max-width: 1000px) {
+  .studio-layout { grid-template-columns: minmax(280px, 320px) minmax(0, 1fr); }
+  .playback-gadget { grid-template-columns: 1fr; }
+  .workspace-heading { flex-wrap: wrap; gap: 8px; }
+}
+@media (max-width: 720px) {
+  .studio-layout { grid-template-columns: 1fr; }
+  .capture-panel { display: flex; padding: 20px; }
+  .capture-panel h2 { margin-top: 16px; }
+  .capture-visual { width: 100%; padding: 8px 0 16px; }
+  .capture-panel .hero-actions { margin-top: 0; }
+  .primary-actions { flex-wrap: wrap; }
+  .primary-actions button { flex: 1 1 170px; }
+  .capture-privacy p { font-size: 0.875rem; }
+  .capture-privacy br { display: initial; }
+  .workspace-heading { padding: 8px 12px; }
+  .workspace-tabs { gap: 8px; }
+  :root:root .app-shell .workspace-tabs button { padding-inline: 8px; }
+  .word-count { font-size: 0.875rem; }
+  .brand-bar { gap: 12px; }
+  .brand { font-size: 20px; }
+  .brand-bar .settings-button > span { display: none; }
+  .brand-bar .settings-button { padding-inline: 12px; }
+  .studio-footer { flex-wrap: wrap; }
+  .studio-footer > span { max-width: none; }
+  .activity-progress-panel .activity-progress { align-items: start; }
+  .activity-progress-panel .activity-progress p { flex-basis: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:root .app-shell :is(button, [role="button"]) { transition: none; animation: none; transform: none; }
+  :root:root .app-shell :is(button, [role="button"]):active { transform: none; }
+}
+@media (forced-colors: active) {
+  :root:root .app-shell :is(button, [role="button"]) { forced-color-adjust: auto; background: ButtonFace; color: ButtonText; border-color: ButtonText; }
+  :root:root .app-shell :is(button, [role="button"]):focus-visible { outline-color: Highlight; }
+  :root:root .app-shell button:is([aria-selected="true"], [aria-pressed="true"]) { background: Highlight; color: HighlightText; }
+}
