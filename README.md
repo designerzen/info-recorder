@@ -27,6 +27,29 @@ No microphone audio is sent to an application server. Transcription runs client-
 - OPFS support through `navigator.storage.getDirectory()`
 - AudioWorklet and OffscreenCanvas support for playback and worker-rendered waveform visuals
 
+### GitHub Pages
+
+The Pages workflow builds with `/info-recorder/` as the base path and deploys
+`dist/` on pushes to `main`. GitHub Pages does not supply the COOP/COEP headers
+configured for Vite. On static hosts, the app registers `isolation-worker.js`
+within its base path, waits for it to take control, and reloads once before
+starting the app. The worker adds COOP/COEP to same-origin responses, including
+worker scripts, without caching assets or changing other projects on the origin.
+The page URL, settings, recordings, and model caches are preserved.
+
+Service workers must be allowed in the browser. Hosts that already supply the
+headers (Vite and Electron) skip this setup. Verify a Pages build with:
+
+```sh
+pnpm exec tsc -b
+pnpm exec vite build --base=/info-recorder/
+pnpm test:pages
+```
+
+This smoke test serves production files without isolation headers, checks a
+fresh visit and reload, and exchanges shared memory with a real browser worker.
+The Pages workflow runs it before uploading the deployment artifact.
+
 ## Run
 
 ```sh

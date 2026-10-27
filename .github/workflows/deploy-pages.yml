@@ -45,6 +45,12 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Install browser for Pages smoke test
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verify isolation on a static host without response headers
+        run: pnpm test:pages
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

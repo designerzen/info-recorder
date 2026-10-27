@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "test:audio": "vitest run tests/unit/audioUtils.test.ts",
     "test:e2e": "playwright test",
+    "test:pages": "playwright test --config playwright.pages.config.ts",
     "test:design": "playwright test tests/e2e/design-system.spec.ts",
     "test:all": "vitest run && playwright test",
     "preview": "vite preview --host 127.0.0.1",
