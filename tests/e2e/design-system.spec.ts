@@ -143,9 +143,11 @@ test("measured primary ink remains AAA without native CSS contrast functions", a
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const value of ["light-mode", "dark-mode", "neon-nights"]) {
     await openTheme(page, pageStylePresets.find((preset) => preset.value === value)!.settings);
-    const record = page.getByRole("button", { name: "Start recording", exact: true });
+    // Settings Done is the primary button; Record is a ring on the surface.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const record = page.getByRole("button", { name: "Done", exact: true });
     const native = await readButton(record);
-    await page.addStyleTag({ content: ":root:root .app-shell .record-button { color: var(--ds-button-ink) !important; }" });
+    await page.addStyleTag({ content: ":root:root .app-shell [data-intent=\"primary\"] { color: var(--ds-button-ink) !important; }" });
     await assertButton(record, "fallback");
     expect((await readButton(record)).iconContrast).toBeCloseTo(native.iconContrast, 2);
     await record.hover();

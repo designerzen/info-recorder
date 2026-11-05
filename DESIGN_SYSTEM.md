@@ -18,6 +18,7 @@ labels and use dashed boundaries.
 | Button target | At least **44 × 44 CSS pixels**, including icon and tab buttons. Transcript sentences are running text and are exempt, but every sentence must be reachable with Tab and show the focus ring |
 | Button label | At least **16 CSS pixels**, wrapping instead of clipping |
 | Supporting text | At least **14 CSS pixels**; body text at least 16 |
+| Record | One generated red, at least **3:1** against every surface in every theme, used only for the record dot, its halo and its spinner |
 | Boundary | Fill or border at least **3:1** against the surrounding surface for primary actions. Secondary toolbar, dock and menu controls have no outline: their icon or text is the mark, at 7:1 |
 | Keyboard focus | At least **3px solid**, offset **3px**, contrast at least **3:1** against managed surrounding surfaces |
 | Motion | 140ms colour/press feedback; no motion when reduced motion is requested |

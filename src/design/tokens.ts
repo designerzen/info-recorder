@@ -42,6 +42,9 @@ export function createDesignTokens(settings: PageStyleSettings) {
   const primaryInk = colorContrast(primaryLevels.map((level) => b[level]), [n[0], n[1000]]);
   const border = colorContrast(surfaces, dark ? [n[400], n[300], n[100]] : [n[600], n[700], n[900]], 3.2);
   const focus = colorContrast([...surfaces, ...controlLevels.map((level) => n[level])], [ink], 3.2);
+  // Record is red in every theme: the brightest red that still stands out from every surface.
+  const red = palette({ l: 0.55, c: 0.2, h: 27 }).values;
+  const record = colorContrast(surfaces, dark ? [red[400], red[300], red[200], red[100]] : [red[500], red[600], red[700], red[800]], designContract.nonTextContrast);
   const tokens: Record<string, string> = {};
   for (const [name, ramp] of [["neutral", neutral], ["brand", brand]] as const) {
     tokens[`--ds-${name}-source`] = oklchCss(ramp.source);
@@ -60,11 +63,12 @@ export function createDesignTokens(settings: PageStyleSettings) {
     "--ds-control-ink": oklchCss(controlInk), "--ds-primary-ink": oklchCss(primaryInk),
     "--ds-selected": use("brand", dark ? 800 : 100),
     "--ds-accent-text": oklchCss(colorContrast(surfaces, dark ? [b[200], b[100], ink] : [b[700], b[800], ink])),
+    "--ds-record": oklchCss(record),
     "--ds-scheme": dark ? "dark" : "light"
   });
   for (const [index, state] of ["rest", "hover", "pressed"].entries()) {
     tokens[`--ds-control-${state}`] = use("neutral", controlLevels[index]);
     tokens[`--ds-primary-${state}`] = use("brand", primaryLevels[index]);
   }
-  return { dark, tokens, neutral: n, brand: b };
+  return { dark, tokens, neutral: n, brand: b, record, surfaces };
 }

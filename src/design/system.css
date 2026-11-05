@@ -81,7 +81,7 @@ html { scroll-padding-block: 24px 100px; }
   transition: background-color var(--ds-motion) ease, transform var(--ds-motion) ease;
 }
 
-:root:root .app-shell :is(button, [role="button"]):is(.record-button, .primary, [data-intent="primary"]) {
+:root:root .app-shell :is(button, [role="button"]):is(.primary, [data-intent="primary"]) {
   --ds-button-bg: var(--ds-primary-rest);
   --ds-button-hover: var(--ds-primary-hover);
   --ds-button-pressed: var(--ds-primary-pressed);
@@ -174,7 +174,7 @@ html { scroll-padding-block: 24px 100px; }
 /* Progressive enhancement. The old color-contrast() spelling is not a
    baseline dependency. tokens.ts measures every fallback at >=7:1 first. */
 @supports (color: contrast-color(white)) {
-  :root:root .app-shell button:is(.record-button, .primary, [data-intent="primary"]):not(:disabled) {
+  :root:root .app-shell button:is(.primary, [data-intent="primary"]):not(:disabled) {
     color: contrast-color(var(--ds-button-bg));
   }
 }

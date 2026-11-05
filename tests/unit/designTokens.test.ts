@@ -35,6 +35,11 @@ for (const settings of [defaultPageStyle, ...pageStylePresets.map((preset) => pr
         previous = luminance(rgb);
       }
     }
+    const { record, surfaces } = createDesignTokens(settings);
+    for (const surface of surfaces) expect(contrastRatio(oklchToRgb(record), oklchToRgb(surface))).toBeGreaterThanOrEqual(3);
+    // Still recognisably red, not a brown or pink compromise.
+    expect(record.h).toBeCloseTo(27, 0);
+    expect(record.c).toBeGreaterThan(0.08);
     const ink = neutral[dark ? 1000 : 0];
     for (const level of dark ? [200, 100, 50] as const : [700, 800, 900] as const) {
       expect(contrastRatio(oklchToRgb(ink), oklchToRgb(brand[level]))).toBeGreaterThanOrEqual(7);
