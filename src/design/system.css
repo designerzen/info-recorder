@@ -45,7 +45,8 @@ html { scroll-padding-block: 24px 100px; }
 .settings-dialog, .page-settings-dialog { scroll-padding: var(--ds-space-4); }
 
 /* Deliberately outranks the legacy component styles and imported presets.
-   All buttons, including inline phrases and icon controls, have the same floor. */
+   All buttons and icon controls have the same floor. Transcript sentences are the
+   exception: they are running text, so they flow like subtitles but stay focusable. */
 :root:root .app-shell :is(button, [role="button"]) {
   --ds-button-bg: var(--ds-control-rest);
   --ds-button-hover: var(--ds-control-hover);
@@ -141,8 +142,34 @@ html { scroll-padding-block: 24px 100px; }
 .phrase-map-message[data-playing="true"] .phrase-map-bubble { background: transparent; border: 0; }
 .phrase-map-controls { gap: 8px; padding: 8px; background: var(--ds-surface); border-radius: var(--ds-radius-control); }
 .phrase-map-message-list { padding: 8px; gap: 8px; width: min(280px, calc(100vw - 6rem)); background: var(--ds-surface); border-radius: 12px; scroll-padding: 8px; }
-:root:root .app-shell .sentence-button { display: inline-block; text-align: start; margin: 4px; padding: 6px 8px; }
-.sentence-word.active { background: var(--ds-primary-rest); color: var(--ds-primary-ink) !important; }
+:root:root .app-shell .sentence-button {
+  --ds-button-bg: transparent;
+  display: inline;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0.1em 0.15em;
+  border: 0;
+  border-radius: 4px;
+  font-size: inherit;
+  font-weight: 400;
+  line-height: inherit;
+  text-align: start;
+  overflow-wrap: normal;
+  cursor: pointer;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+:root:root .app-shell .sentence-button.active {
+  --ds-button-bg: var(--ds-selected);
+  --ds-button-ink: var(--ds-text);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+:root:root .app-shell .sentence-button[aria-disabled="true"] { border: 0; cursor: text; }
+/* Paint only: anything that changes the word's size would re-lay out the whole paragraph for every word. */
+.sentence-word.active { padding: 0; font-weight: inherit; background: var(--ds-primary-rest); box-shadow: 0 0 0 0.12em var(--ds-primary-rest); color: var(--ds-primary-ink) !important; }
 
 /* Progressive enhancement. The old color-contrast() spelling is not a
    baseline dependency. tokens.ts measures every fallback at >=7:1 first. */

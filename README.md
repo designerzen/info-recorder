@@ -1,23 +1,25 @@
 # Info Recorder
 
-Word Trail (Info Recorder) is a speech recorder and transcription app for the browser and Electron desktop. It records microphone audio into the Origin Private File System (OPFS), draws a live waveform, uses local voice activity detection to split speech into phrase parts, and transcribes speech on screen with Moonshine or Whisper.
+Word Trail (Info Recorder) is an offline speech recorder and transcription app for the browser and Electron desktop. It turns speech and location into subtitles split into sentences. Press a sentence to hear it, play the whole transcript with each word highlighted, or follow the sentences along a route on a map.
 
 No microphone audio is sent to an application server. Transcription runs client-side. On first use, the browser downloads the selected model files and stores them in browser-managed offline storage. Later runs reuse the cached files unless the user clears site data, changes browser profile or device, or changes models.
 
+Microphone transcription defaults to browser speech recognition only when `processLocally` and on-device language-pack support are available. Missing packs are installed when supported; unavailable, failed, or stalled (60 seconds) local setup falls back to the selected model, which defaults to Moonshine. Browser speech recognition is always configured with `processLocally: true`; remote browser recognition is never used. File transcription and translation continue to use the selected model. Browser recognition provides no word timestamps, so word timings are estimated from capture time and word length; sentence replay and highlighting are approximate on this path.
+
 ## Features
 
-- Microphone recording with `MediaRecorder`
-- Timestamped audio chunks written to OPFS under `recordings/session-...`
-- Full-recording download from stored OPFS chunks
-- Per-part downloads, where a part is a spoken phrase separated by low activity or silence
-- Live scrolling waveform drawn with an `OffscreenCanvas` worker
-- Live ASS subtitle rendering with JASSUB on a canvas
-- Optional read-aloud of the current subtitle with either built-in Web Speech API voices or Supertonic WebGPU voices loaded from Hugging Face
-- Interchangeable voice activity detection modes for paragraph and part boundaries
-- Moonshine Tiny, Small, and Medium Streaming English models through the official browser WASM runtime
-- Client-side Whisper through Transformers.js WebGPU or whisper.cpp WASM
-- First-run model download with persistent offline reuse on later runs
-- OPFS playback through an AudioWorklet after decoding stored chunks to PCM
+- One button to record and pause, with an upload button and settings. There is no Stop: pausing releases the microphone and location, and sessions save themselves
+- Activity indicator, live waveform and recording clock from the moment Record is pressed; audio is captured while the transcription engine gets ready
+- Media files can be uploaded or dropped anywhere on the page
+- Sentences show their time, length, location and engine on hover, keyboard focus, or long press
+- Whole-transcript karaoke playback that keeps the current word in view, using recorded audio or a voice, with pause, speed, and pressing a sentence to continue from it
+- A map of where each sentence was spoken, with the route, a timeline slider and playback following along
+- Automatic saving with restore after a reload or crash; earlier recordings are listed in Settings
+- Sentence correction, search and copy
+- Text, SRT, VTT, GPX, GeoJSON, audio and captioned video downloads
+- Screen wake lock while recording, and a clear pause if the microphone is disconnected
+- Moonshine models through the official browser WASM runtime, and Whisper through Transformers.js WebGPU or whisper.cpp WASM
+- Optional read-aloud with Web Speech API voices or Supertonic WebGPU voices
 
 ## Requirements
 
@@ -27,6 +29,21 @@ No microphone audio is sent to an application server. Transcription runs client-
 - OPFS support through `navigator.storage.getDirectory()`
 - AudioWorklet and OffscreenCanvas support for playback and worker-rendered waveform visuals
 
+### Offline use
+
+Word Trail is an offline application. The production web build registers `isolation-worker.js`,
+which stores the built app so it opens with no network, including in a new tab. It is
+installable as an app through `manifest.webmanifest`. These still need a network once, and are
+then kept on the device:
+
+- the on-device speech language pack, or the Moonshine model (Settings has a button to download it ahead of time). Uploads always use the model, because browser speech cannot read files
+- the optional Supertonic voices and the ffmpeg encoder used for audio conversion and video export
+
+Map images come from OpenStreetMap, which sees the area being viewed; recordings and text are
+never sent. Areas already viewed stay available offline, and without images the route,
+sentences and playback still work. Electron bundles the app itself, but downloads and map images
+are not cached by the worker there.
+
 ### GitHub Pages
 
 The Pages workflow builds with `/info-recorder/` as the base path and deploys
@@ -34,7 +51,7 @@ The Pages workflow builds with `/info-recorder/` as the base path and deploys
 configured for Vite. On static hosts, the app registers `isolation-worker.js`
 within its base path, waits for it to take control, and reloads once before
 starting the app. The worker adds COOP/COEP to same-origin responses, including
-worker scripts, without caching assets or changing other projects on the origin.
+worker scripts, without changing other projects on the origin.
 The page URL, settings, recordings, and model caches are preserved.
 
 Service workers must be allowed in the browser. Hosts that already supply the
@@ -145,14 +162,14 @@ To check a packaged executable, run
 
 ### Recording
 
-1. Leave `Write timestamped MediaRecorder chunks to OPFS` enabled.
-2. Keep the default Moonshine Small Streaming model for live talk, or select another Moonshine/Whisper model in Settings.
-3. Choose the chunk size for OPFS writes.
-4. Press `Listen`.
-5. Speak normally. The waveform scrolls as audio arrives, and text appears as transcription chunks complete.
-6. Pause between phrases to create part boundaries.
-7. Press `Stop`.
-8. Use `Download Full Audio` for the whole recording, or the per-part buttons for phrase-level audio.
+1. Press `Record` and allow the microphone and location. The clock and waveform start straight away.
+2. Speak normally. Sentences appear below and the transcript follows along.
+3. Press `Pause` when you are done. This stops the microphone, location and wake lock. Press `Resume` to carry on.
+4. Press a sentence to hear it, or `Play transcript` for the whole recording with each word highlighted.
+5. Open `Map` to see where each sentence was spoken.
+6. Press `New`, or `Upload` a file, to begin something new. The previous session stays in Settings under Saved recordings.
+
+Sessions save automatically every few seconds and on pause, and reopen after a reload until you start something new. Turning off `Save audio chunks` in Settings also turns off saving, and the app then asks before discarding a transcript.
 
 The download panel below the transcript saves the displayed transcript as UTF-8
 text, or exports the original recording or a local Supertonic TTS voice as MP3,
@@ -207,13 +224,16 @@ Each recording session is stored in OPFS:
 ```txt
 recordings/
   session-YYYY-MM-DDTHH-MM-SS-sssZ/
+    transcript.json
+    pcm-000000.raw
+    source-media
     session.json
     000000-YYYY-MM-DDTHH-MM-SS-sssZ.webm
     000000-YYYY-MM-DDTHH-MM-SS-sssZ.json
     ...
 ```
 
-`session.json` contains session metadata, chunk metadata, and phrase part metadata. Phrase part metadata includes `LAT` and `LONG` values from the browser's native geolocation service when available, or `null` when unavailable or not permitted. Each chunk also has a matching JSON metadata file with start time, end time, duration, MIME type, and byte length.
+`transcript.json` holds the transcript with word timings, the location track, and what is needed to reopen the session. `pcm-*.raw` holds the recording as 16-bit PCM, which plays and seeks accurately, and `source-media` holds an uploaded file. `session.json` and the numbered chunks hold the `MediaRecorder` audio and phrase part metadata.
 
 ## Implementation Notes
 
@@ -228,12 +248,15 @@ recordings/
 - The worker checks `ModelRegistry.is_pipeline_cached_files(...)` for the exact WebGPU ASR pipeline and reports whether the model is cached.
 - The model selector shows which models are already available offline before you disconnect from the network.
 - Live microphone transcription defaults to raw timed audio chunks. Activity detection can be enabled in settings when you want silence-aware chunking.
+- Each sentence is placed on the map from a timestamped location track on the same timeline as the audio, so it does not depend on activity detection or saving.
+- The playing position is published outside the state machines and written directly to the DOM, and each transcript paragraph only re-renders when its own text changes, so long transcripts stay smooth.
 - When enabled, VAD runs through `src/vad.ts` and is selected through `appSettings.vad.mode`.
 - Phrase parts are created when activity detection sees low activity or a long trailing silence.
+- Large JASSUB subtitles over the transcript are off by default and can be enabled under Advanced settings.
 - ML VAD is optional and lazy-loaded, so the default build does not pull the model path into the initial UI bundle.
 - The waveform worker only draws. The main thread still reads `AnalyserNode` samples because Web Audio analyser nodes live in the main audio graph.
 - Stored audio chunks use the browser's selected `MediaRecorder` MIME type, usually WebM/Opus.
-- Live subtitles are generated as ASS content and rendered through JASSUB, with worker/WASM/font assets bundled by Vite.
+- The optional subtitle overlay is generated as ASS content and rendered through JASSUB, with worker/WASM/font assets bundled by Vite.
 - Subtitle read-aloud can use `SpeechSynthesisUtterance` or the Supertonic browser helper vendored from `supertone-inc/supertonic`. Supertonic is loaded lazily, downloads static model assets from Hugging Face, runs through `onnxruntime-web` with the `webgpu` execution provider, and uses the M1-M5/F1-F5 voice presets.
 
 ## Supertonic Voices

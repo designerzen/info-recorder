@@ -16,7 +16,7 @@ export function HelpPage() {
           <ol>
             <li><strong>Record live speech.</strong> Select <strong>Start recording</strong> and allow microphone access when your browser asks. Speak normally and watch the transcript appear.</li>
             <li><strong>Or use an existing file.</strong> Select <strong>Upload media</strong> and choose an audio or video file from your device. Here, “upload” opens the file locally for transcription.</li>
-            <li><strong>Let the app finish.</strong> Select <strong>Stop recording</strong> when you are done speaking. For a file, wait for transcription to finish. The status bar shows progress.</li>
+            <li><strong>Pause when you are done.</strong> Select <strong>Pause recording</strong> when you finish speaking. This turns off the microphone, and <strong>Resume</strong> carries on. Your work is saved automatically. For a file, wait for transcription to finish, or select <strong>Cancel</strong> to keep what is done so far.</li>
           </ol>
           <p>The first run downloads the selected speech model, which can take a while. Keep the tab open. Cached models can be reused on later visits.</p>
         </section>
@@ -40,7 +40,7 @@ export function HelpPage() {
         <section aria-labelledby="help-settings">
           <span className="section-eyebrow">04 / MAKE IT YOURS</span>
           <h2 id="help-settings">Choose your settings</h2>
-          <p>Open <strong>Settings</strong> to choose a microphone, transcription model, speech detection, and playback options. The default model is for English speech; choose a multilingual model for other supported languages. Stop recording before changing recording settings.</p>
+          <p>Open <strong>Settings</strong> to choose a microphone, transcription model, speech detection, and playback options. The default model is for English speech; choose a multilingual model for other supported languages. Pause recording before changing recording settings.</p>
           <p>Keep <strong>Save audio chunks</strong> enabled if you want a local recording for playback and downloads. Under <strong>Appearance</strong>, adjust the page’s type, colours, and layout.</p>
           <p>Optional <strong>Translation</strong> shows translated sentences below the original text when your browser supports it. Choose the source and target languages and enable translation. Language packs may download on first use; enable translation again after reloading.</p>
         </section>

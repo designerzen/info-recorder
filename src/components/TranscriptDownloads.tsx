@@ -11,6 +11,7 @@ type SourceMedia = {
     fileName?: string;
 };
 type Props = {
+    showTextDownload?: boolean;
     textOnly?: boolean;
     text: string;
     sentences: TranscriptSentence[];
@@ -19,7 +20,7 @@ type Props = {
     busy: boolean;
 };
 export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads", (initialProps, host) => {
-    let { text, sentences, hasSourceAudio, getSourceMedia, busy, textOnly = false } = initialProps;
+    let { text, sentences, hasSourceAudio, getSourceMedia, busy, textOnly = false, showTextDownload = true } = initialProps;
     const scope = createLifecycle();
     const machine = createStateMachine({ source: "original",
         format: ("mp3") as DownloadAudioFormat,
@@ -94,11 +95,11 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
             return null;
         const showMediaOptions = !textOnly && !busy && (hasSourceAudio || supportsTts);
         return (<section className="transcript-downloads" aria-label="Transcript downloads" aria-busy={state.exporting}>
-      <div className="download-heading">
+      {showTextDownload ? <div className="download-heading">
         <button type="button" onClick={() => downloadTranscriptBlob(new Blob([`${text.trim()}\n`], { type: "text/plain;charset=utf-8" }), "transcript.txt")}>
           <FileText size={17} aria-hidden="true"/> Download text
         </button>
-      </div>
+      </div> : null}
       {showMediaOptions ? <><fieldset className="download-options" disabled={state.exporting}>
         <legend>Audio download options</legend>
         <label className="download-source">Audio source
@@ -150,5 +151,5 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
     }
     scope.setRefresh(refresh);
     refresh();
-    return { update(props) { ({ text, sentences, hasSourceAudio, getSourceMedia, busy, textOnly = false } = props); refresh(); }, dispose: scope.dispose };
+    return { update(props) { ({ text, sentences, hasSourceAudio, getSourceMedia, busy, textOnly = false, showTextDownload = true } = props); refresh(); }, dispose: scope.dispose };
 });

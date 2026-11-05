@@ -15,7 +15,7 @@ labels and use dashed boundaries.
 | --- | --- |
 | Button text | At least **7:1** in rest, hover, pressed, selected and disabled states |
 | Other interface text | Semantic strong/muted tokens selected at **7:1** against all managed surfaces |
-| Button target | At least **44 × 44 CSS pixels**, including icon, tab and sentence buttons |
+| Button target | At least **44 × 44 CSS pixels**, including icon and tab buttons. Transcript sentences are running text and are exempt, but every sentence must be reachable with Tab and show the focus ring |
 | Button label | At least **16 CSS pixels**, wrapping instead of clipping |
 | Supporting text | At least **14 CSS pixels**; body text at least 16 |
 | Boundary | Fill or border at least **3:1** against the surrounding surface |

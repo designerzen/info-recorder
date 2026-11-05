@@ -76,6 +76,13 @@ describe("getActiveTranscriptPosition", () => {
     });
   });
 
+  it("rests on the last word to start through a gap, rather than jumping ahead", () => {
+    const words = [{ text: "one ", startMs: 0, endMs: 500 }, { text: "two ", startMs: 1000, endMs: 1500 }, { text: "three", startMs: 2000, endMs: 3000 }];
+    const sentence = { id: "s", paragraphId: "p", text: "one two three", startMs: 0, endMs: 3000, words };
+    expect(getActiveTranscriptPosition([sentence], 700)?.wordIndex).toBe(0);
+    expect(getActiveTranscriptPosition([sentence], 1700)?.wordIndex).toBe(1);
+  });
+
   it("returns null when playback is outside known transcript timing", () => {
     expect(getActiveTranscriptPosition(transcriptSentences, 2200)).toBeNull();
   });

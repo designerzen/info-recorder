@@ -2,10 +2,11 @@ import { h, Fragment, defineElement, patch } from "../ui/dom";
 import { createLifecycle, sameInputs } from "../ui/lifecycle";
 import { createStateMachine } from "../state/machine";
 import { ExternalLink, LocateFixed, MapPin, Play, Square, X, ZoomIn, ZoomOut } from "../ui/icons";
-import type { LocatedTranscriptSentence } from "../transcript/locatedTranscript";
+import type { LocatedTranscriptSentence, LocationFix } from "../transcript/locatedTranscript";
 export type PhraseLocationMapMessage = LocatedTranscriptSentence;
 type Props = {
     messages: PhraseLocationMapMessage[];
+    track?: LocationFix[];
     onPlay: (message: PhraseLocationMapMessage) => void;
     onStop: () => void;
     activeMessageId: string | null;
@@ -25,8 +26,28 @@ const TILE_SIZE = 256;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 18;
 const DEFAULT_ZOOM = 14;
+const CLUSTER_CELL_PX = 48;
+// Beyond this, sentence text spread over several places would cover the map, so markers open it on demand.
+const MAX_SENTENCES_WITH_TEXT = 3;
 export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", (initialProps, host) => {
-    let { messages, onPlay, onStop, activeMessageId, isPlaying, playbackLabel, playbackUnavailable } = initialProps;
+    let { messages, track = [], onPlay, onStop, activeMessageId, isPlaying, playbackLabel, playbackUnavailable } = initialProps;
+    // New sentences must not snatch the view from someone exploring the map.
+    let hasMovedView = false;
+    let followedMessageId: string | null = null;
+    const zoomBy = (delta: number) => {
+        hasMovedView = true;
+        setView((current) => ({ ...current, zoom: clampZoom(current.zoom + delta) }));
+    };
+    const centerOn = (message: PhraseLocationMapMessage) => {
+        setView((current) => ({ ...current, latitude: message.LAT, longitude: message.LONG }));
+    };
+    const pointers = new Map<number, { x: number; y: number }>();
+    let pinchDistance = 0;
+    const getPinchDistance = () => {
+        const [first, second] = [...pointers.values()];
+        return Math.hypot(first.x - second.x, first.y - second.y);
+    };
+    const tileIsVisibleOffline = () => navigator.onLine !== false;
     const scope = createLifecycle();
     const machine = createStateMachine({ selectedId: (null) as string | null,
         tilesFailed: false,
@@ -53,15 +74,19 @@ export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", 
     let locatedMessages = calculatelocatedMessages();
     let calculatelocatedMessagesInputs: readonly unknown[] | undefined;
     let selected = locatedMessages.find((message) => message.id === state.selectedId);
+    let selectedIndex = Math.max(0, locatedMessages.findIndex((message) => message.id === (activeMessageId ?? state.selectedId)));
+    let route: LocationFix[] = track.filter((fix) => isValidCoordinate(fix.LAT, fix.LONG));
+    // Sentences close enough to overlap at this zoom share a marker, so a moving recording stays readable.
     const calculategroups = () => {
-        const byCoordinate = new Map<string, PhraseLocationMapMessage[]>();
+        const byCell = new Map<string, PhraseLocationMapMessage[]>();
         for (const message of locatedMessages) {
-            const key = `${message.LAT.toFixed(5)},${message.LONG.toFixed(5)}`;
-            const group = byCoordinate.get(key) ?? [];
+            const point = project(message.LAT, message.LONG, state.view.zoom);
+            const key = `${Math.round(point.x / CLUSTER_CELL_PX)},${Math.round(point.y / CLUSTER_CELL_PX)}`;
+            const group = byCell.get(key) ?? [];
             group.push(message);
-            byCoordinate.set(key, group);
+            byCell.set(key, group);
         }
-        return [...byCoordinate.entries()];
+        return [...byCell.entries()];
     };
     let groups = calculategroups();
     let calculategroupsInputs: readonly unknown[] | undefined;
@@ -81,10 +106,27 @@ export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", 
                     return;
                 dragRef.current = { x: event.clientX, y: event.clientY, center: centerPixel };
                 event.currentTarget.setPointerCapture(event.pointerId);
+                pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+                if (pointers.size === 2)
+                    pinchDistance = getPinchDistance();
+            }} onWheel={(event: WheelEvent) => {
+                event.preventDefault();
+                zoomBy(event.deltaY < 0 ? 1 : -1);
             }} onPointerMove={(event) => {
+                if (pointers.has(event.pointerId))
+                    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+                if (pointers.size === 2) {
+                    const distance = getPinchDistance();
+                    if (Math.abs(distance - pinchDistance) > 48) {
+                        zoomBy(distance > pinchDistance ? 1 : -1);
+                        pinchDistance = distance;
+                    }
+                    return;
+                }
                 const drag = dragRef.current;
                 if (!drag)
                     return;
+                hasMovedView = true;
                 const scale = TILE_SIZE * 2 ** state.view.zoom;
                 const x = drag.center.x - (event.clientX - drag.x);
                 const y = Math.max(0, Math.min(scale, drag.center.y - (event.clientY - drag.y)));
@@ -93,22 +135,43 @@ export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", 
                     longitude: ((x / scale * 360) % 360 + 360) % 360 - 180,
                     latitude: Math.atan(Math.sinh(Math.PI * (1 - 2 * y / scale))) * 180 / Math.PI
                 });
-            }} onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
+            }} onPointerUp={(event) => { pointers.delete(event.pointerId); dragRef.current = null; }} onPointerCancel={(event: PointerEvent) => { pointers.delete(event.pointerId); dragRef.current = null; }}>
         <div className="phrase-map-tiles" aria-hidden="true">
-          {tiles.map((tile) => (<img key={`${tile.zoom}-${tile.column}-${tile.y}`} alt="" draggable={false} crossOrigin="anonymous" onError={() => setTilesFailed(true)} src={`https://tile.openstreetmap.org/${tile.zoom}/${tile.x}/${tile.y}.png`} style={{
+          {tiles.map((tile) => (<img key={`${tile.zoom}-${tile.column}-${tile.y}`} alt="" draggable={false} crossOrigin="anonymous" className="phrase-map-tile" onError={(event: Event) => { (event.target as HTMLElement).hidden = true; setTilesFailed(true); }} src={`https://tile.openstreetmap.org/${tile.zoom}/${tile.x}/${tile.y}.png`} style={{
                     left: `${tile.left}px`,
                     top: `${tile.top}px`
                 }}/>))}
         </div>
 
+        {route.length > 1 ? <svg className="phrase-map-route" aria-hidden="true" width={state.size.width} height={state.size.height}>
+          <polyline fill="none" points={route.map((fix) => {
+                const point = project(fix.LAT, fix.LONG, state.view.zoom);
+                return `${point.x - topLeft.x},${point.y - topLeft.y}`;
+            }).join(" ")}/>
+        </svg> : null}
         <div className="phrase-map-markers">
           {groups.map(([key, group]) => {
                 const point = project(group[0].LAT, group[0].LONG, state.view.zoom);
+                if (groups.length > 1 && locatedMessages.length > MAX_SENTENCES_WITH_TEXT) {
+                    const first = group.find((message) => message.id === activeMessageId) ?? group.find((message) => message.id === state.selectedId) ?? group[0];
+                    return (<div key={key} className="phrase-map-location phrase-map-cluster" style={{
+                            left: `${point.x - topLeft.x}px`,
+                            top: `${point.y - topLeft.y}px`
+                        }}>
+                  <button type="button" className="phrase-map-cluster-button" data-active={group.some((message) => message.id === activeMessageId || message.id === state.selectedId)}
+                    aria-label={`Phrase ${first.sequence + 1}${group.length > 1 ? ` and ${group.length - 1} nearby` : ""}: ${first.text}`} aria-expanded={state.selectedId === first.id} aria-controls="map-phrase-detail" title={first.text}
+                    onClick={() => {
+                            setSelectedId(first.id);
+                            if (!playbackUnavailable)
+                                onPlay(first);
+                        }}>{group.length > 1 ? `${first.sequence + 1}+${group.length - 1}` : first.sequence + 1}</button>
+                </div>);
+                }
                 return (<div key={key} className="phrase-map-location" style={{
                         left: `${point.x - topLeft.x}px`,
                         top: `${point.y - topLeft.y}px`
                     }}>
-                <span className="phrase-map-pin" aria-hidden="true">
+                <span className="phrase-map-pin" aria-hidden="true" data-active={group.some((message) => message.id === activeMessageId)}>
                   <MapPin size={18}/>
                 </span>
                 <div className="phrase-map-message-list">
@@ -128,13 +191,13 @@ export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", 
         </div>
 
         <div className="phrase-map-controls" aria-label="Map controls">
-          <button type="button" onClick={() => setView((current) => ({ ...current, zoom: clampZoom(current.zoom + 1) }))} title="Zoom in" aria-label="Zoom in">
+          <button type="button" onClick={() => zoomBy(1)} title="Zoom in" aria-label="Zoom in">
             <ZoomIn size={17}/>
           </button>
-          <button type="button" onClick={() => setView((current) => ({ ...current, zoom: clampZoom(current.zoom - 1) }))} title="Zoom out" aria-label="Zoom out">
+          <button type="button" onClick={() => zoomBy(-1)} title="Zoom out" aria-label="Zoom out">
             <ZoomOut size={17}/>
           </button>
-          <button type="button" onClick={() => setView(getFittedView(locatedMessages, state.size))} title="Fit phrase locations" aria-label="Fit phrase locations">
+          <button type="button" onClick={() => { hasMovedView = false; setView(getFittedView(locatedMessages, state.size)); }} title="Fit phrase locations" aria-label="Fit phrase locations">
             <LocateFixed size={17}/>
           </button>
           <a href={osmUrl} rel="noreferrer" target="_blank" title="Open this map in OpenStreetMap" aria-label="Open this map in OpenStreetMap">
@@ -146,7 +209,16 @@ export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", 
           &copy; OpenStreetMap contributors
         </a>
       </div>
-      {state.tilesFailed ? <p className="map-tile-error" role="status">Map tiles are unavailable. Phrase locations and playback remain available.</p> : null}
+      {state.tilesFailed ? <p className="map-tile-error" role="status">Map tiles are unavailable{tileIsVisibleOffline() ? "" : " offline"}. Areas you have already viewed stay available, and the route, sentences and playback still work.</p> : <p className="map-privacy-note">Map images come from OpenStreetMap, which sees the area being viewed. Your audio and text stay on this device.</p>}
+      {locatedMessages.length > 1 ? <label className="phrase-map-timeline">
+        <span>{selectedIndex + 1} / {locatedMessages.length}</span>
+        <input type="range" aria-label="Sentence timeline" min={0} max={locatedMessages.length - 1} value={selectedIndex} onChange={(event: Event) => {
+                const message = locatedMessages[Number((event.target as HTMLInputElement).value)];
+                hasMovedView = true;
+                setSelectedId(message.id);
+                centerOn(message);
+            }}/>
+      </label> : null}
       {selected ? (<section className="map-phrase-detail" id="map-phrase-detail" aria-label="Selected phrase">
           <div className="map-phrase-heading">
             <strong>Phrase {selected.sequence + 1}</strong>
@@ -173,8 +245,10 @@ export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", 
             }
         }
         selected = locatedMessages.find((message) => message.id === state.selectedId);
+        selectedIndex = Math.max(0, locatedMessages.findIndex((message) => message.id === (activeMessageId ?? state.selectedId)));
+        route = track.filter((fix) => isValidCoordinate(fix.LAT, fix.LONG));
         {
-            const inputs = [locatedMessages];
+            const inputs = [locatedMessages, state.view.zoom];
             if (!sameInputs(calculategroupsInputs, inputs)) {
                 groups = calculategroups();
                 calculategroupsInputs = inputs;
@@ -202,15 +276,23 @@ export const PhraseLocationMap = defineElement<Props>("wt-phrase-location-map", 
             return () => observer.disconnect();
         });
         scope.watch("fit-locations", [locatedMessages, state.size], () => {
-            if (locatedMessages.length === 0)
+            if (locatedMessages.length === 0 || hasMovedView)
                 return;
             setView(getFittedView(locatedMessages, state.size.width > 0 ? state.size : { width: 640, height: 320 }));
+        });
+        scope.watch("follow-playback", [activeMessageId], () => {
+            const active = activeMessageId ? locatedMessages.find((message) => message.id === activeMessageId) : undefined;
+            if (active && followedMessageId !== active.id) {
+                followedMessageId = active.id;
+                hasMovedView = true;
+                centerOn(active);
+            }
         });
         scope.flush();
     }
     scope.setRefresh(refresh);
     refresh();
-    return { update(props) { ({ messages, onPlay, onStop, activeMessageId, isPlaying, playbackLabel, playbackUnavailable } = props); refresh(); }, dispose: scope.dispose };
+    return { update(props) { ({ messages, track = [], onPlay, onStop, activeMessageId, isPlaying, playbackLabel, playbackUnavailable } = props); refresh(); }, dispose: scope.dispose };
 });
 function getFittedView(messages: PhraseLocationMapMessage[], size: Size) {
     if (messages.length === 0) {

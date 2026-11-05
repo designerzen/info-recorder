@@ -9,7 +9,7 @@ test.describe("info-recorder app", () => {
     await expect(page.getByRole("button", { name: "Record" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Read the transcript aloud" })).toBeHidden();
     await expect(page.getByLabel("Transcript playback voice")).toBeHidden();
-    await expect(page.locator("button:visible")).toHaveCount(2);
+    await expect(page.locator("button:visible")).toHaveCount(3);
     await expect(page.getByLabel("Transcript workspace")).toBeHidden();
     await page.evaluate(() => dispatchEvent(new Event("fixture:transcript")));
 
@@ -40,6 +40,9 @@ test.describe("info-recorder app", () => {
 
   test("explains how to upgrade when WebGPU is unavailable", async ({ page }) => {
     await page.addInitScript(() => {
+      // The dialog only applies when processLocally recognition cannot take over.
+      Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: undefined });
+      Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: undefined });
       delete (Navigator.prototype as Navigator & { gpu?: unknown }).gpu;
       Object.defineProperty(navigator, "gpu", {
         configurable: true,
@@ -56,6 +59,9 @@ test.describe("info-recorder app", () => {
 
   test("allows WASM model selection without WebGPU", async ({ page }) => {
     await page.addInitScript(() => {
+      // The dialog only applies when processLocally recognition cannot take over.
+      Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: undefined });
+      Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: undefined });
       delete (Navigator.prototype as Navigator & { gpu?: unknown }).gpu;
       Object.defineProperty(navigator, "gpu", {
         configurable: true,
@@ -73,6 +79,9 @@ test.describe("info-recorder app", () => {
 
   test("explains how to upgrade when WebAssembly is unavailable", async ({ page }) => {
     await page.addInitScript(() => {
+      // The dialog only applies when processLocally recognition cannot take over.
+      Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: undefined });
+      Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: undefined });
       Object.defineProperty(window, "WebAssembly", {
         configurable: true,
         value: undefined

@@ -39,5 +39,18 @@ async function prepareIsolation() {
   }
 }
 
+// Keep the app itself available offline. Electron bundles its assets and Vite serves them live.
+async function prepareOffline() {
+  if (!import.meta.env.PROD || !["https:", "http:"].includes(location.protocol) || !("serviceWorker" in navigator)) return;
+  try {
+    const workerUrl = new URL(`${import.meta.env.BASE_URL}isolation-worker.js`, location.origin);
+    await navigator.serviceWorker.register(workerUrl, { scope: import.meta.env.BASE_URL, updateViaCache: "none" });
+    (await navigator.serviceWorker.ready).active?.postMessage("precache");
+  } catch (error) {
+    console.warn("Could not prepare Word Trail for offline use.", error);
+  }
+}
+
 await prepareIsolation();
 await import("./main");
+void prepareOffline();

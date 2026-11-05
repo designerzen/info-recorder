@@ -1,13 +1,14 @@
 import { h, Fragment, defineElement, patch, type DomContent, type DomEvent } from "../ui/dom";
 import { createLifecycle, uniqueId } from "../ui/lifecycle";
 import { createStateMachine } from "../state/machine";
-import { Mic, Palette, RotateCcw, SlidersHorizontal, Volume2, X } from "../ui/icons";
+import { Mic, Palette, RotateCcw, Save, SlidersHorizontal, Volume2, X } from "../ui/icons";
 import { PageSettingsControls } from "./PageSettingsDialog";
 import type { PageStyleSettings } from "../config/pageStyle";
 import { getTranscriptionModelOption, settingsOptions, transcriptionModelOptions, type RuntimeSettings, type SettingsOption } from "../config/settingsOptions";
 import { estimateSecondsRemaining, formatBytes, formatDuration, type ModelInventoryEntry } from "../recorder/modelInventory";
 type SimpleSettingsProps = {
     translationControls?: DomContent;
+    sessionControls?: DomContent;
     disabled: boolean;
     isOpen: boolean;
     isOpfsAvailable: boolean;
@@ -30,7 +31,7 @@ type SimpleSettingsProps = {
     onUpdate: (option: SettingsOption, value: boolean | number | string) => void;
 };
 export const SimpleSettings = defineElement<SimpleSettingsProps>("wt-simple-settings", (initialProps, host) => {
-    let { translationControls, disabled, isOpen, isOpfsAvailable, isSpeaking, microphoneDevices, modelDownloadSpeedBps, modelInventory, modelInventoryMessage, selectedVoiceId, settings, voiceOptions, onClose, onReset, onSetPageStyle, onSetMicrophone, onSetVoice, onUpdate } = initialProps;
+    let { translationControls, sessionControls, disabled, isOpen, isOpfsAvailable, isSpeaking, microphoneDevices, modelDownloadSpeedBps, modelInventory, modelInventoryMessage, selectedVoiceId, settings, voiceOptions, onClose, onReset, onSetPageStyle, onSetMicrophone, onSetVoice, onUpdate } = initialProps;
     const scope = createLifecycle();
     const machine = createStateMachine({ activeTab: ("app") as "app" | "appearance" }, (context) => context.activeTab);
     let state = machine.context;
@@ -105,7 +106,7 @@ export const SimpleSettings = defineElement<SimpleSettingsProps>("wt-simple-sett
           </button>
         </div>
         {state.activeTab === "app" ? (<div ref={bodyRef} id={`${settingsId}-app-panel`} aria-labelledby={`${settingsId}-app-tab`} tabIndex={0} className="settings-body settings-app-body" role="tabpanel">
-            {disabled ? <p className="settings-notice" role="status">Stop recording or wait for processing to change recording settings.</p> : null}
+            {disabled ? <p className="settings-notice" role="status">Pause recording or wait for processing to change recording settings.</p> : null}
             <SettingsGroup title="Recording" icon={<Mic size={18} aria-hidden="true"/>}>
               <SettingControl disabled={disabled} modelDownloadSpeedBps={modelDownloadSpeedBps} modelInventory={modelInventory} modelInventoryMessage={modelInventoryMessage} option={transcriptionModelOption} settings={settings} onUpdate={onUpdate}/>
               <label className="settings-control">
@@ -128,6 +129,7 @@ export const SimpleSettings = defineElement<SimpleSettingsProps>("wt-simple-sett
               </label>
             </SettingsGroup>
             {translationControls}
+            {sessionControls ? <SettingsGroup title="Saved recordings" icon={<Save size={18} aria-hidden="true"/>}>{sessionControls}</SettingsGroup> : null}
             <SettingsGroup title="Playback" icon={<Volume2 size={18} aria-hidden="true"/>}>
               {isSpeaking ? <p className="settings-hint settings-wide" role="status">Stop playback to change volume and voice settings.</p> : null}
               <div className="volume-settings">
@@ -222,6 +224,7 @@ export const SimpleSettings = defineElement<SimpleSettingsProps>("wt-simple-sett
     return { update(props) {
             ({
                 translationControls,
+                sessionControls,
                 disabled,
                 isOpen,
                 isOpfsAvailable,

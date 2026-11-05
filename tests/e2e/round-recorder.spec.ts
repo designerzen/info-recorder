@@ -10,7 +10,7 @@ for (const width of [1280, 390]) {
     await mockRecorder(page);
     await page.goto("/");
     const record = page.getByRole("button", { name: "Start recording", exact: true });
-    await expect(page.locator("button:visible")).toHaveCount(2);
+    await expect(page.locator("button:visible")).toHaveCount(3);
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
     await expect(record).toHaveCSS("border-radius", "50%");
     const rect = (await record.boundingBox())!;
@@ -21,7 +21,7 @@ for (const width of [1280, 390]) {
     const pause = page.getByRole("button", { name: "Pause recording", exact: true });
     await expect(pause).toHaveText("Pause");
     await page.evaluate(() => dispatchEvent(new Event("fixture:transcript")));
-    const transcript = page.getByRole("region", { name: "Transcript", exact: true });
+    const transcript = page.getByRole("tabpanel", { name: "Transcript", exact: true });
     await expect(transcript).toHaveText("A thought worth keeping.");
     const control = (await pause.boundingBox())!;
     expect((await transcript.boundingBox())!.y).toBeGreaterThan(control.y + control.height);
@@ -35,7 +35,10 @@ for (const width of [1280, 390]) {
     const downloading = page.waitForEvent("download");
     await page.getByRole("button", { name: "Download text", exact: true }).click();
     expect(await readFile((await (await downloading).path())!, "utf8")).toBe("A thought worth keeping.\n");
-    for (const selector of [".workspace-tabs", ".upload-button", ".phrase-map", ".activity-progress-panel"]) {
+    await expect(page.getByRole("tab", { name: "Map", exact: true })).toBeVisible();
+    // Pausing ends capture, so a file can be added without any separate Stop.
+    await expect(page.getByRole("button", { name: "Upload media", exact: true })).toBeEnabled();
+    for (const selector of [".phrase-map", ".activity-progress-panel"]) {
       await expect(page.locator(selector)).toHaveCount(0);
     }
     const footer = (await page.locator(".transcription-download-footer").boundingBox())!;

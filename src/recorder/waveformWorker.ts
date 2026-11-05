@@ -7,6 +7,7 @@ type WaveformMessage =
       width: number;
       height: number;
       pixelRatio: number;
+      stroke?: string;
     }
   | { type: "resize"; width: number; height: number; pixelRatio: number }
   | { type: "samples"; samples: Float32Array }
@@ -17,12 +18,14 @@ let context: OffscreenCanvasRenderingContext2D | null = null;
 let width = 1;
 let height = 1;
 let pixelRatio = 1;
+let stroke = "#15655a";
 const waveformHistory = new Float32Array(appSettings.waveform.historySamples);
 
 self.onmessage = ({ data }: MessageEvent<WaveformMessage>) => {
   if (data.type === "init") {
     canvas = data.canvas;
     context = canvas.getContext("2d");
+    stroke = data.stroke ?? stroke;
     resize(data.width, data.height, data.pixelRatio);
     draw();
   }
@@ -69,17 +72,16 @@ function draw() {
   if (!context) return;
 
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#f7faf7";
-  context.fillRect(0, 0, width, height);
 
-  context.strokeStyle = "#d2ddd5";
+  context.strokeStyle = stroke;
+  context.globalAlpha = 0.25;
   context.lineWidth = Math.max(1, pixelRatio);
   context.beginPath();
   context.moveTo(0, height / 2);
   context.lineTo(width, height / 2);
   context.stroke();
 
-  context.strokeStyle = "#15655a";
+  context.globalAlpha = 1;
   context.lineWidth = Math.max(2, 2 * pixelRatio);
   context.beginPath();
 

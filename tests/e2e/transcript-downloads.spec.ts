@@ -14,7 +14,7 @@ async function fixture(page: Page, paused = false) {
       transcriptParagraphs:[{id:'p1',text:${JSON.stringify(text)},words:${JSON.stringify(words)}}],
       paragraphs:[${JSON.stringify(text)}], partialText:'',audioParts:[],sourceMedia:{url:'/export-fixture.wav',kind:'audio',fileName:'example.wav'},
       opfsChunkCount:0,isRecording:${paused},isPaused:${paused},isPreparing:false,isTranscribingMedia:false,isModelLoading:false,
-      isTranscriptionSupported:true,runtimeSupport:{},modelInventory:[],setWaveformCanvas:noop,start:noop,stop:noop
+      locationTrack:[],locationStatus:'off',listSessions:async()=>[],getElapsedMs:()=>0,newSession:()=>{},isTranscriptionSupported:true,runtimeSupport:{},modelInventory:[],setWaveformCanvas:noop,start:noop,stop:noop
     });`
   }));
   // Exercise real phrase concatenation/caption timing without downloading a voice model.
@@ -52,7 +52,7 @@ for (const width of [1365, 390]) {
     const panel = page.getByRole("region", { name: "Transcript downloads" });
     await expect(panel).toBeVisible();
     const downloading = page.waitForEvent("download");
-    await panel.getByRole("button", { name: "Download text" }).click();
+    await page.getByRole("button", { name: "Download text", exact: true }).click();
     const download = await downloading;
     expect(download.suggestedFilename()).toBe("transcript.txt");
     expect(await readFile((await download.path())!, "utf8")).toBe(text + "\n");

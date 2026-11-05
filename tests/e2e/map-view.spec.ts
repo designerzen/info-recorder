@@ -5,10 +5,13 @@ const text = "A recorded phrase with enough detail to be condensed into a previe
 const start = Date.parse("2026-10-22T12:00:00Z");
 const words = text.split(" ").map((word, index) => ({ text: word + " ", startMs: 1000 + index * 80, endMs: 1080 + index * 80 }));
 
-test("Map is hidden when a transcript has no locations", async ({ page }) => {
+test("Map remains accessible when a transcript has no locations", async ({ page }) => {
   await mockRecorder(page, { text: "A thought worth keeping." });
   await page.goto("/");
-  await expect(page.getByRole("tab", { name: "Map", exact: true })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Map", exact: true }).click();
+  await expect(page.getByRole("tabpanel", { name: "Map", exact: true })).toContainText("No recorded locations yet.");
+  await page.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect(page.getByRole("tabpanel", { name: "Transcript", exact: true })).toContainText("A thought worth keeping.");
   await expect(page.locator(".phrase-map-tiles")).toHaveCount(0);
 });
 
@@ -27,7 +30,7 @@ for (const viewport of [{ width: 1365, height: 1000 }, { width: 390, height: 844
           paragraphs: [${JSON.stringify(text)}], partialText: '', audioParts: [{ name:'part-0', sequence:0,
             startIso:'2026-10-22T12:00:00Z', endIso:'2026-10-22T12:00:08Z', LAT:51.5, LONG:-0.12 }],
           recordingStartedAt:${start}, opfsChunkCount:1, sourceMedia:null,
-          isTranscriptionSupported:true, runtimeSupport:{}, modelInventory:[],
+          locationTrack:[{atMs:0,LAT:51.5,LONG:-0.12}],locationStatus:'off',listSessions:async()=>[],getElapsedMs:()=>0,newSession:()=>{},isTranscriptionSupported:true, runtimeSupport:{}, modelInventory:[],
           modelLoadMessage:'', modelLoadProgress:0, modelDownloadSpeedBps:0,
           isRecording:false, isPreparing:false, isTranscribingMedia:false, isModelLoading:false,
           getRecordingSourceMedia:async () => {

@@ -663,6 +663,17 @@ export const settingsOptions: SettingsOption[] = [
     })
   },
   {
+    key: "subtitleOverlay",
+    section: "speech",
+    label: "Show large subtitles over the transcript during playback",
+    kind: "checkbox",
+    getValue: (settings) => settings.subtitles.overlayEnabled,
+    setValue: (settings, value) => ({
+      ...settings,
+      subtitles: { ...settings.subtitles, overlayEnabled: value }
+    })
+  },
+  {
     key: "speech",
     section: "speech",
     label: "Read subtitles aloud",

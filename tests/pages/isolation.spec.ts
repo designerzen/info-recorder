@@ -99,6 +99,11 @@ test("blocked service workers show the support error without a reload loop", asy
   const context = await browser.newContext({ serviceWorkers: "block" });
   try {
     const page = await context.newPage();
+    // Otherwise on-device Speech (processLocally) would run without isolation.
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: undefined });
+      Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: undefined });
+    });
     let navigations = 0;
     page.on("request", request => {
       if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations++;

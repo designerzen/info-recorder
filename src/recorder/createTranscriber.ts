@@ -11,7 +11,12 @@ import type { TranscriptParagraph, TranscriptWord } from "../transcript/timedTra
 import { getTranscriptionRuntimeSupport } from "./runtimeSupport";
 import { isMoonshineModelId, isWasmTranscriptionModelId } from "../config/settings";
 import type { ModelInventoryEntry } from "./modelInventory";
-import { GeoLocationService } from "./geoLocationService";
+import { GeoLocationService, type LocationStatus } from "./geoLocationService";
+import { appendSessionAudio, deleteSession as deleteStoredSession, listSessions as listStoredSessions, loadSession, saveSession, saveSessionMedia, type SavedSession } from "./sessionStore";
+import { estimateWordTimings, replaceSentenceText, type TranscriptSentence } from "../transcript/timedTranscript";
+import type { LocationFix } from "../transcript/locatedTranscript";
+import { RecordedAudio } from "./recordedAudio";
+import { prepareLocalSpeechRecognition, createLocalSpeechSession, supportsLocalSpeechRecognition } from "./localSpeechRecognition";
 type WorkerMessage = {
     type: "ready";
 } | {
@@ -58,6 +63,9 @@ const LIVE_ANALYSIS_CHUNK_MS = 500;
 const UPLOADED_MEDIA_MIN_CHUNK_MS = 10000;
 const UPLOADED_MEDIA_TARGET_CHUNK_MS = 24000;
 const MODEL_SPEED_STORAGE_KEY = "info-recorder-model-download-bps";
+const AUTOSAVE_DELAY_MS = 3000;
+// Decoding reads the whole file into memory; larger files stream through a media element instead.
+const MAX_DECODABLE_MEDIA_BYTES = 1024 * 1024 * 1024;
 type SourceMedia = {
     url: string;
     kind: "audio" | "video";
@@ -68,6 +76,7 @@ export function createTranscriber(...initialInputs: [
 ]) {
     let settings = initialInputs[0];
     const scope = createLifecycle();
+    const recordedAudio = new RecordedAudio();
     const machine = createRecorderMachine();
     scope.own(machine.subscribe(scope.invalidate));
     scope.own(machine.dispose);
@@ -88,9 +97,12 @@ export function createTranscriber(...initialInputs: [
         partialText: "",
         progress: "",
         mediaTranscriptionProgress: 0,
-        sourceActivityRms: 0,
         sourceMedia: (null) as SourceMedia | null,
+        hasRecordingAudio: false,
         recordingStartedAt: (null) as number | null,
+        locationTrack: ([]) as LocationFix[],
+        locationStatus: ("off") as LocationStatus,
+        transcriptionEngine: "",
         modelCacheStatus: "The transcription model downloads once, then stays available offline on this device.",
         modelInventory: ([]) as ModelInventoryEntry[],
         modelInventoryMessage: "",
@@ -123,7 +135,6 @@ export function createTranscriber(...initialInputs: [
     const setPartialText = (value: typeof state.partialText | ((previous: typeof state.partialText) => typeof state.partialText)) => contextStore.send({ type: "partialText", value });
     const setProgress = (value: typeof state.progress | ((previous: typeof state.progress) => typeof state.progress)) => contextStore.send({ type: "progress", value });
     const setMediaTranscriptionProgress = (value: typeof state.mediaTranscriptionProgress | ((previous: typeof state.mediaTranscriptionProgress) => typeof state.mediaTranscriptionProgress)) => contextStore.send({ type: "mediaTranscriptionProgress", value });
-    const setSourceActivityRms = (value: typeof state.sourceActivityRms | ((previous: typeof state.sourceActivityRms) => typeof state.sourceActivityRms)) => contextStore.send({ type: "sourceActivityRms", value });
     const setSourceMedia = (value: typeof state.sourceMedia | ((previous: typeof state.sourceMedia) => typeof state.sourceMedia)) => contextStore.send({ type: "sourceMedia", value });
     const setRecordingStartedAt = (value: typeof state.recordingStartedAt | ((previous: typeof state.recordingStartedAt) => typeof state.recordingStartedAt)) => contextStore.send({ type: "recordingStartedAt", value });
     const setModelCacheStatus = (value: typeof state.modelCacheStatus | ((previous: typeof state.modelCacheStatus) => typeof state.modelCacheStatus)) => contextStore.send({ type: "modelCacheStatus", value });
@@ -227,6 +238,35 @@ export function createTranscriber(...initialInputs: [
     } = { current: [] };
     const currentPartStartsAtRef = { current: "" };
     const geoLocationServiceRef = { current: new GeoLocationService() };
+    const getElapsedMs = () => state.recordingStartedAt === null ? 0 : Math.max(0, captureNow() - state.recordingStartedAt);
+    geoLocationServiceRef.current.observe(getElapsedMs, () => {
+        contextStore.send({ type: "locationTrack", value: geoLocationServiceRef.current.track });
+        contextStore.send({ type: "locationStatus", value: geoLocationServiceRef.current.status });
+    });
+    const engineReadyRef = { current: Promise.resolve() };
+    const engineFailedRef = { current: false };
+    const wakeLockRef: {
+        current: WakeLockSentinel | null;
+    } = { current: null };
+    const mediaCancelRef = { current: false };
+    const cancelPlayableMediaRef: {
+        current: (() => void) | null;
+    } = { current: null };
+    const ignoreWorkerResultsRef = { current: false };
+    const sessionRef: {
+        current: {
+            name: string;
+            kind: SavedSession["kind"];
+            startedAt: number;
+            durationMs: number;
+            media?: SavedSession["media"];
+            pcmSequence: number;
+        } | null;
+    } = { current: null };
+    const sessionWritesRef = { current: Promise.resolve() };
+    const autosaveTimerRef: {
+        current: number | null;
+    } = { current: null };
     const tailRef: {
         current: Float32Array;
     } = { current: new Float32Array() };
@@ -277,10 +317,11 @@ export function createTranscriber(...initialInputs: [
     let requiresWebGpu = !isWasmTranscriptionModelId(settings.transcription.modelId) &&
         !isMoonshineModelId(settings.transcription.modelId);
     let requiresCrossOriginIsolation = isMoonshineModelId(settings.transcription.modelId);
-    let isTranscriptionSupported = runtimeSupport.hasWebAssembly &&
+    const canUseSelectedModel = () => runtimeSupport.hasWebAssembly &&
         runtimeSupport.isSecureContext &&
         (!requiresCrossOriginIsolation || runtimeSupport.hasCrossOriginIsolation) &&
         (!requiresWebGpu || runtimeSupport.hasWebGpu);
+    let isTranscriptionSupported = canUseSelectedModel() || (runtimeSupport.isSecureContext && settings.transcription.task === "transcribe" && supportsLocalSpeechRecognition());
     let isOpfsRecordingAvailable = canUseOpfsRecording();
     let isOpfsPlaybackAvailable = canUseOpfsPlayback();
     let opfsChunkMs = settings.audio.opfsChunkMs;
@@ -356,6 +397,7 @@ export function createTranscriber(...initialInputs: [
         worker.postMessage({
             type: "init",
             canvas: offscreen,
+            stroke: getComputedStyle(canvas).color,
             width: rect.width,
             height: rect.height,
             pixelRatio: window.devicePixelRatio || 1
@@ -375,7 +417,6 @@ export function createTranscriber(...initialInputs: [
         analyserSourceRef.current = null;
         analyserRef.current = null;
         analyserGainRef.current = null;
-        setSourceActivityRms(0);
         clearWaveform();
     };
     const cleanupMediaSource = () => {
@@ -395,6 +436,10 @@ export function createTranscriber(...initialInputs: [
         }
     };
     const clearSourceMedia = () => {
+        recordedAudio.clear();
+        contextStore.send({ type: "hasRecordingAudio", value: false });
+        contextStore.send({ type: "locationTrack", value: [] });
+        contextStore.send({ type: "locationStatus", value: "off" });
         if (recordedSourceRef.current) {
             URL.revokeObjectURL(recordedSourceRef.current.url);
             recordedSourceRef.current = null;
@@ -410,6 +455,8 @@ export function createTranscriber(...initialInputs: [
         setRecordingStartedAt(null);
     };
     const getRecordingSourceMedia = async (): Promise<SourceMedia | null> => {
+        // WAV snapshots have a finite duration and can seek before capture ends.
+        if (recordedAudio.hasAudio) return recordedAudio.getSourceMedia();
         const session = opfsSessionRef.current;
         if (!session)
             return null;
@@ -450,7 +497,8 @@ export function createTranscriber(...initialInputs: [
         const now = performance.now();
         if (now - lastActivityUpdateRef.current > 80) {
             lastActivityUpdateRef.current = now;
-            setSourceActivityRms(activityRms);
+            // Written straight to the DOM: this changes too often to re-render the app for.
+            waveformCanvasRef.current?.parentElement?.style.setProperty("--input-level", Math.min(1, activityRms * 8).toFixed(2));
         }
         const samples = createFloat32Buffer(buffer.length);
         samples.set(buffer);
@@ -509,17 +557,81 @@ export function createTranscriber(...initialInputs: [
         playbackContextRef.current = null;
         setIsPlayingRecording(false);
     };
+    let localSpeech: ReturnType<typeof createLocalSpeechSession> | null = null;
+    const releaseMicrophone = () => {
+        streamRef.current?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
+        streamRef.current = null;
+    };
+    const acquireWakeLock = async () => {
+        try {
+            wakeLockRef.current = await navigator.wakeLock?.request("screen") ?? null;
+        }
+        catch {
+            // A sleeping screen may end capture, but refusal must not stop recording.
+        }
+    };
+    const releaseWakeLock = () => {
+        void wakeLockRef.current?.release().catch(() => { });
+        wakeLockRef.current = null;
+    };
+    const canPersist = () => shouldRecordToOpfs && isOpfsRecordingAvailable;
+    const saveCurrentSession = (closed = false) => {
+        const session = sessionRef.current;
+        if (!session)
+            return sessionWritesRef.current;
+        const pcm = recordedAudio.takeUnsaved();
+        const recordingMs = machine.value === "recording" ? getElapsedMs() : 0;
+        session.durationMs = Math.max(session.durationMs, recordingMs, state.transcriptParagraphs.at(-1)?.words.at(-1)?.endMs ?? 0);
+        const snapshot: SavedSession = {
+            version: 1,
+            name: session.name,
+            kind: session.kind,
+            startedAt: session.startedAt,
+            durationMs: session.durationMs,
+            sampleRate: recordedAudio.sampleRateHz,
+            engine: state.transcriptionEngine,
+            paragraphs: state.transcriptParagraphs,
+            locationTrack: state.locationTrack,
+            media: session.media,
+            closed
+        };
+        const pcmSequence = pcm ? session.pcmSequence++ : 0;
+        sessionWritesRef.current = sessionWritesRef.current.then(async () => {
+            if (pcm)
+                await appendSessionAudio(session.name, pcmSequence, pcm);
+            await saveSession(snapshot);
+        }).catch((cause) => {
+            setOpfsError(cause instanceof Error ? cause.message : "Unable to save this session.");
+        });
+        return sessionWritesRef.current;
+    };
+    const closeCurrentSession = async () => {
+        if (autosaveTimerRef.current !== null) {
+            window.clearTimeout(autosaveTimerRef.current);
+            autosaveTimerRef.current = null;
+        }
+        const session = sessionRef.current;
+        if (!session)
+            return;
+        const isEmpty = state.transcriptParagraphs.length === 0;
+        await saveCurrentSession(true);
+        sessionRef.current = null;
+        if (isEmpty)
+            await deleteStoredSession(session.name).catch(() => { });
+    };
     const resetCaptureState = () => {
+        localSpeech?.dispose();
+        localSpeech = null;
         contextStore.send({ type: "isPaused", value: false });
         contextStore.send({ type: "isChangingCapture", value: false });
         pauseStartedAt = 0;
         pausedMilliseconds = 0;
         mediaRecorderRef.current = null;
+        releaseWakeLock();
         cleanupMediaSource();
         stopAnalyser();
         geoLocationServiceRef.current.stop();
-        streamRef.current?.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
+        releaseMicrophone();
         audioContextRef.current?.close();
         audioContextRef.current = null;
         tailRef.current = new Float32Array();
@@ -544,7 +656,6 @@ export function createTranscriber(...initialInputs: [
         setIsRecording(false);
         setIsTranscribingMedia(false);
         setPartialText("");
-        setSourceActivityRms(0);
     };
     const startOpfsRecording = async (mimeType: string) => {
         if (!isOpfsRecordingAvailable) {
@@ -556,9 +667,9 @@ export function createTranscriber(...initialInputs: [
         opfsChunkSequenceRef.current = 0;
         opfsNextChunkStartMsRef.current = Date.now();
         setRecordingStartedAt(opfsNextChunkStartMsRef.current);
+        sessionRef.current = { name: session.name, kind: "recording", startedAt: session.startedAt, durationMs: 0, pcmSequence: 0 };
         currentPartChunksRef.current = [];
         currentPartStartsAtRef.current = "";
-        geoLocationServiceRef.current.start();
         setOpfsSessionName(`recordings/${session.name}`);
         setOpfsChunkCount(0);
         setAudioParts([]);
@@ -623,6 +734,22 @@ export function createTranscriber(...initialInputs: [
         });
     };
     const processPcmChunk = async (mono: Float32Array, sampleRate: number) => {
+        recordedAudio.append(mono, sampleRate);
+        if (recordedAudio.hasAudio && !state.hasRecordingAudio)
+            contextStore.send({ type: "hasRecordingAudio", value: true });
+        // Audio queues here while the engine gets ready, so speech is not lost to a slow start.
+        await engineReadyRef.current;
+        if (engineFailedRef.current)
+            return;
+        if (localSpeech) {
+            // Keep recording PCM for playback/downloads without duplicate model results.
+            latestVoiceRef.current = settings.vad.enabled
+                ? await detectVoiceActivity(mono, sampleRate, settings.vad, adaptiveVadStateRef.current, sileroVadStateRef.current)
+                : { hasSpeech: true, score: 1, trailingSilenceMs: 0, mode: "browser-local" };
+            liveTranscribedSecondsRef.current += mono.length / sampleRate;
+            return;
+        }
+        await ensureWorkerReady();
         const chunkStartSeconds = liveTranscribedSecondsRef.current;
         liveTranscribedSecondsRef.current += mono.length / sampleRate;
         if (!settings.vad.enabled) {
@@ -788,7 +915,8 @@ export function createTranscriber(...initialInputs: [
         mediaRecorderRef.current = null;
         try {
             await flushMicrophonePcmCapture(sampleRate);
-            await waitForWorkerIdle();
+            if (localSpeech) await localSpeech.stop();
+            else await waitForWorkerIdle();
             await stopped;
             await opfsWriteQueueRef.current;
         }
@@ -796,6 +924,7 @@ export function createTranscriber(...initialInputs: [
             setError(cause instanceof Error ? cause.message : "Unable to finish live transcription.");
         }
         resetCaptureState();
+        await saveCurrentSession();
     };
     const startMicrophonePcmCapture = async (stream: MediaStream, audioContext: AudioContext) => {
         cleanupMicrophoneCapture();
@@ -834,20 +963,117 @@ export function createTranscriber(...initialInputs: [
             });
         };
     };
+    const watchMicrophone = (stream: MediaStream) => {
+        for (const track of stream.getAudioTracks()) {
+            track.onended = () => {
+                void pause().then(() => {
+                    contextStore.send({ type: "error", value: "The microphone was disconnected. Reconnect it and press Resume to continue." });
+                });
+            };
+        }
+    };
+    const startMediaRecorder = (stream: MediaStream) => {
+        const recorder = new MediaRecorder(stream, {
+            mimeType: getSupportedMimeType()
+        });
+        mediaRecorderRef.current = recorder;
+        recorder.ondataavailable = (event) => {
+            const voice = latestVoiceRef.current;
+            if (voice) {
+                storeMediaRecorderChunk(event.data, voice);
+                if (!voice.hasSpeech ||
+                    voice.trailingSilenceMs >= settings.vad.partSilenceMs) {
+                    finalizeCurrentPart();
+                }
+            }
+        };
+        recorder.onstop = () => {
+            finalizeCurrentPart();
+            worker.postMessage({ type: "flush" });
+        };
+        recorder.start(opfsChunkMs);
+    };
+    /** Use on-device Speech when processLocally is available, otherwise the selected model. */
+    const prepareEngine = async (stream: MediaStream) => {
+        // Translation still needs the selected model; browser recognition only transcribes.
+        const recognition = settings.transcription.task === "transcribe"
+            ? await prepareLocalSpeechRecognition(settings.transcription.language)
+            : null;
+        if (streamRef.current !== stream)
+            return;
+        if (recognition) {
+            // Recognition results arrive late, so the first partial best marks when speech began.
+            let resultStartMs: number | null = null;
+            let resultEndMs = 0;
+            const capturedMs = () => liveTranscribedSecondsRef.current * 1000;
+            localSpeech = createLocalSpeechSession(recognition, stream.getAudioTracks()[0], {
+                onFinal: (text) => {
+                    const words = estimateWordTimings(text, resultStartMs ?? resultEndMs, capturedMs());
+                    resultStartMs = null;
+                    resultEndMs = words.at(-1)?.endMs ?? resultEndMs;
+                    hasTranscriptRef.current = true;
+                    setTranscriptParagraphs((current) => {
+                        const next = [...current, { id: `p-${transcriptParagraphSequenceRef.current++}`, text, words }];
+                        setParagraphs(next.map((paragraph) => paragraph.text));
+                        return next;
+                    });
+                },
+                onPartial: (text) => {
+                    if (text && resultStartMs === null)
+                        resultStartMs = Math.max(resultEndMs, capturedMs() - LIVE_ANALYSIS_CHUNK_MS);
+                    setPartialText(text);
+                },
+                onError: (message) => {
+                    if (!canUseSelectedModel()) {
+                        void stop();
+                        contextStore.send({ type: "error", value: message });
+                        return;
+                    }
+                    localSpeech?.dispose();
+                    localSpeech = null;
+                    setPartialText("");
+                    contextStore.send({ type: "transcriptionEngine", value: settings.transcription.modelId });
+                    setProgress("Switching to the selected on-device transcription model...");
+                    void ensureWorkerReady().catch((cause) => {
+                        setError(cause instanceof Error ? cause.message : message);
+                    });
+                }
+            });
+            try {
+                await localSpeech.start();
+                contextStore.send({ type: "transcriptionEngine", value: "speech" });
+                return;
+            }
+            catch {
+                localSpeech.dispose();
+                localSpeech = null;
+            }
+        }
+        if (!canUseSelectedModel())
+            throw new Error("Local browser speech recognition is unavailable and the selected model is not supported in this browser context.");
+        contextStore.send({ type: "transcriptionEngine", value: settings.transcription.modelId });
+        if (!isModelCachedRef.current) {
+            setModelLoadProgress(0);
+            setModelLoadMessage(hasCheckedModelCacheRef.current ? "Checking model files..." : "Checking model cache...");
+        }
+        await ensureWorkerReady();
+    };
     const start = async () => {
         if (!machine.can("PREPARE"))
             return;
+        setError("");
+        setIsPreparing(true);
         pauseStartedAt = 0;
         pausedMilliseconds = 0;
         contextStore.send({ type: "isPaused", value: false });
-        setError("");
+        await closeCurrentSession();
         clearSourceMedia();
         setParagraphs([]);
         setTranscriptParagraphs([]);
         setPartialText("");
         hasTranscriptRef.current = false;
         transcriptParagraphSequenceRef.current = 0;
-        setIsPreparing(true);
+        contextStore.send({ type: "transcriptionEngine", value: "" });
         if (!isTranscriptionSupported) {
             setIsPreparing(false);
             setError("The selected transcription model is not supported in this browser context.");
@@ -856,11 +1082,7 @@ export function createTranscriber(...initialInputs: [
         try {
             const stream = await getMicrophoneStream(settings);
             streamRef.current = stream;
-            if (!isModelCachedRef.current) {
-                setModelLoadProgress(0);
-                setModelLoadMessage(hasCheckedModelCacheRef.current ? "Checking model files..." : "Checking model cache...");
-            }
-            await ensureWorkerReady();
+            watchMicrophone(stream);
             latestVoiceRef.current = {
                 hasSpeech: false,
                 score: 0,
@@ -868,37 +1090,27 @@ export function createTranscriber(...initialInputs: [
                 mode: "unknown"
             };
             adaptiveVadStateRef.current = { noiseFloor: null };
+            engineFailedRef.current = false;
+            engineReadyRef.current = prepareEngine(stream).catch((cause) => {
+                engineFailedRef.current = true;
+                resetCaptureState();
+                worker.postMessage({ type: "flush" });
+                contextStore.send({ type: "error", value: cause instanceof Error ? cause.message : "Unable to start transcription." });
+            });
             const audioContext = new AudioContext({ sampleRate: 16000 });
             audioContextRef.current = audioContext;
             startAnalyser(stream, audioContext);
             await startMicrophonePcmCapture(stream, audioContext);
             setRecordingStartedAt(Date.now());
-            const mimeType = getSupportedMimeType();
             if (shouldRecordToOpfs && isOpfsRecordingAvailable) {
-                await startOpfsRecording(mimeType);
-                const recorder = new MediaRecorder(stream, {
-                    mimeType
-                });
-                mediaRecorderRef.current = recorder;
-                recorder.ondataavailable = (event) => {
-                    const voice = latestVoiceRef.current;
-                    if (voice) {
-                        storeMediaRecorderChunk(event.data, voice);
-                        if (!voice.hasSpeech ||
-                            voice.trailingSilenceMs >= settings.vad.partSilenceMs) {
-                            finalizeCurrentPart();
-                        }
-                    }
-                };
-                recorder.onstop = () => {
-                    finalizeCurrentPart();
-                    worker.postMessage({ type: "flush" });
-                };
-                recorder.start(opfsChunkMs);
+                await startOpfsRecording(getSupportedMimeType());
+                startMediaRecorder(stream);
             }
+            geoLocationServiceRef.current.start();
             setMediaTranscriptionProgress(0);
             setIsRecording(true);
             setIsPreparing(false);
+            void acquireWakeLock();
         }
         catch (cause) {
             resetCaptureState();
@@ -906,28 +1118,42 @@ export function createTranscriber(...initialInputs: [
             setError(cause instanceof Error ? cause.message : "Unable to start recording.");
         }
     };
+    /** Pausing is a real release: the microphone, location and wake lock all stop until Resume. */
     const pause = async () => {
         const context = audioContextRef.current;
         if (!context || state.isPaused || state.isChangingCapture || machine.value !== "recording") return;
         contextStore.send({ type: "isChangingCapture", value: true });
         try {
+            await engineReadyRef.current;
             await context.suspend();
             pauseStartedAt = Date.now();
             const media = mediaRecorderRef.current;
-            if (media?.state === "recording") {
-                media.requestData();
-                media.pause();
+            mediaRecorderRef.current = null;
+            if (media && media.state !== "inactive") {
+                await new Promise<void>((resolve) => {
+                    media.addEventListener("stop", () => resolve(), { once: true });
+                    media.stop();
+                });
             }
-            streamRef.current?.getAudioTracks().forEach((track) => { track.enabled = false; });
+            stopAnalyser();
+            microphoneSourceRef.current?.disconnect();
+            microphoneSourceRef.current = null;
+            releaseMicrophone();
+            geoLocationServiceRef.current.stop();
+            releaseWakeLock();
             contextStore.send({ type: "isPaused", value: true });
             // Finish captured words without disconnecting or resetting the session.
             await flushMicrophonePcmCapture(context.sampleRate, false);
-            worker.postMessage({ type: "flush" });
-            await waitForWorkerIdle();
+            if (localSpeech) await localSpeech.stop();
+            else {
+                worker.postMessage({ type: "flush" });
+                await waitForWorkerIdle();
+            }
             await opfsWriteQueueRef.current;
             tailRef.current = new Float32Array();
             nextSegmentStartsParagraphRef.current = hasTranscriptRef.current;
             liveSpeechStartsParagraphRef.current = hasTranscriptRef.current;
+            await saveCurrentSession();
         } catch (cause) {
             contextStore.send({ type: "error", value: cause instanceof Error ? cause.message : "Unable to pause recording." });
         } finally {
@@ -939,13 +1165,23 @@ export function createTranscriber(...initialInputs: [
         if (!context || !state.isPaused || state.isChangingCapture) return;
         contextStore.send({ type: "isChangingCapture", value: true });
         try {
+            const stream = await getMicrophoneStream(settings);
+            streamRef.current = stream;
+            watchMicrophone(stream);
+            const source = context.createMediaStreamSource(stream);
+            if (microphoneProcessorNodeRef.current)
+                source.connect(microphoneProcessorNodeRef.current);
+            microphoneSourceRef.current = source;
+            startAnalyser(stream, context);
             await context.resume();
-            const media = mediaRecorderRef.current;
-            if (media?.state === "paused") media.resume();
-            streamRef.current?.getAudioTracks().forEach((track) => { track.enabled = true; });
             pausedMilliseconds += Date.now() - pauseStartedAt;
             pauseStartedAt = 0;
+            if (shouldRecordToOpfs && isOpfsRecordingAvailable && opfsSessionRef.current)
+                startMediaRecorder(stream);
+            geoLocationServiceRef.current.resume();
+            void acquireWakeLock();
             contextStore.send({ type: "error", value: "" });
+            if (localSpeech) await localSpeech.start(stream.getAudioTracks()[0]);
             contextStore.send({ type: "isPaused", value: false });
         } catch (cause) {
             contextStore.send({ type: "error", value: cause instanceof Error ? cause.message : "Unable to resume recording." });
@@ -964,14 +1200,26 @@ export function createTranscriber(...initialInputs: [
         }
         worker.postMessage({ type: "warm-cache" });
     };
-    const transcribeAudioFile = async (file: File) => {
+    /** Decode without playing, including video containers, so long files take far less than real time. */
+    const decodeMediaFile = async (file: File) => {
+        if (file.size > MAX_DECODABLE_MEDIA_BYTES)
+            return null;
         const audioContext = new AudioContext({ sampleRate: 16000 });
-        audioContextRef.current = audioContext;
-        const decoded = await audioContext.decodeAudioData(await file.arrayBuffer());
+        try {
+            const decoded = await audioContext.decodeAudioData(await file.arrayBuffer());
+            audioContextRef.current = audioContext;
+            return decoded;
+        }
+        catch {
+            void audioContext.close();
+            return null;
+        }
+    };
+    const transcribeDecodedAudio = async (file: File, decoded: AudioBuffer) => {
         const mono = toMono(decoded);
         let startsNewParagraph = false;
         let offset = 0;
-        while (offset < mono.length) {
+        while (offset < mono.length && !mediaCancelRef.current) {
             const end = await getUploadedMediaSplitEnd(mono, offset, decoded.sampleRate, settings, true);
             if (end === null)
                 break;
@@ -984,6 +1232,8 @@ export function createTranscriber(...initialInputs: [
             setProgress(`Transcribing ${file.name} ${percent}%`);
             await yieldToBrowser();
         }
+        if (mediaCancelRef.current)
+            return;
         setMediaTranscriptionProgress(100);
         await waitForWorkerIdle();
     };
@@ -1044,6 +1294,11 @@ export function createTranscriber(...initialInputs: [
             });
         };
         await new Promise<void>((resolve, reject) => {
+            cancelPlayableMediaRef.current = () => {
+                isEnded = true;
+                media.pause();
+                resolve();
+            };
             media.onerror = () => reject(new Error("This browser could not read that media file."));
             media.ontimeupdate = () => {
                 if (Number.isFinite(media.duration) && media.duration > 0) {
@@ -1075,9 +1330,11 @@ export function createTranscriber(...initialInputs: [
         });
     };
     const transcribeMediaFile = async (file: File) => {
+        if (state.isPaused)
+            await stop();
         if (!machine.can("PREPARE"))
             return;
-        if (!isTranscriptionSupported) {
+        if (!canUseSelectedModel()) {
             setError("The selected transcription model is not supported in this browser context.");
             return;
         }
@@ -1088,29 +1345,46 @@ export function createTranscriber(...initialInputs: [
         setIsPreparing(true);
         setIsRecording(true);
         setIsTranscribingMedia(true);
+        mediaCancelRef.current = false;
+        await closeCurrentSession();
         clearSourceMedia();
         setParagraphs([]);
         setTranscriptParagraphs([]);
         setPartialText("");
         hasTranscriptRef.current = false;
         transcriptParagraphSequenceRef.current = 0;
+        const kind = file.type.startsWith("video/") ? "video" : "audio";
+        contextStore.send({ type: "transcriptionEngine", value: settings.transcription.modelId });
         const nextSourceUrl = URL.createObjectURL(file);
         sourceMediaUrlRef.current = nextSourceUrl;
         setSourceMedia({
             url: nextSourceUrl,
-            kind: file.type.startsWith("video/") ? "video" : "audio",
+            kind,
             fileName: file.name
         });
         if (!state.isModelCached) {
             setModelLoadProgress(0);
             setModelLoadMessage(state.hasCheckedModelCache ? "Checking model files..." : "Checking model cache...");
         }
-        await ensureWorkerReady();
         try {
-            if (file.type.startsWith("audio/")) {
-                await transcribeAudioFile(file);
+            if (canPersist()) {
+                const session = await createOpfsSession(file.type);
+                await saveSessionMedia(session.name, file);
+                sessionRef.current = {
+                    name: session.name,
+                    kind: "upload",
+                    startedAt: session.startedAt,
+                    durationMs: 0,
+                    media: { fileName: file.name, kind, type: file.type },
+                    pcmSequence: 0
+                };
             }
-            else {
+            await ensureWorkerReady();
+            const decoded = await decodeMediaFile(file);
+            if (decoded) {
+                await transcribeDecodedAudio(file, decoded);
+            }
+            else if (!mediaCancelRef.current) {
                 await transcribePlayableMediaFile(file);
             }
         }
@@ -1118,10 +1392,10 @@ export function createTranscriber(...initialInputs: [
             setError(cause instanceof Error ? cause.message : "Unable to transcribe that media file.");
         }
         finally {
+            cancelPlayableMediaRef.current = null;
             cleanupMediaSource();
             stopAnalyser();
-            streamRef.current?.getTracks().forEach((track) => track.stop());
-            streamRef.current = null;
+            releaseMicrophone();
             audioContextRef.current?.close();
             audioContextRef.current = null;
             tailRef.current = new Float32Array();
@@ -1131,6 +1405,88 @@ export function createTranscriber(...initialInputs: [
             setIsTranscribingMedia(false);
             setMediaTranscriptionProgress(0);
             setProgress("");
+            await saveCurrentSession();
+        }
+    };
+    /** Keeps whatever has been transcribed so far and drops anything still queued in the worker. */
+    const cancelMediaTranscription = () => {
+        if (machine.value !== "transcribing" || mediaCancelRef.current)
+            return;
+        mediaCancelRef.current = true;
+        ignoreWorkerResultsRef.current = true;
+        setPartialText("");
+        worker.postMessage({ type: "flush" });
+        cancelPlayableMediaRef.current?.();
+    };
+    const editSentence = (sentence: TranscriptSentence, text: string) => {
+        setTranscriptParagraphs((current) => {
+            const next = current
+                .map((paragraph) => paragraph.id === sentence.paragraphId ? replaceSentenceText(paragraph, sentence, text) : paragraph)
+                .filter((paragraph) => paragraph.text.length > 0);
+            setParagraphs(next.map((paragraph) => paragraph.text));
+            return next;
+        });
+    };
+    const listSessions = async () => canPersist() ? listStoredSessions() : [];
+    const openSession = async (name: string) => {
+        if (!machine.can("PREPARE"))
+            return;
+        await closeCurrentSession();
+        const { session, pcmParts, media } = await loadSession(name);
+        clearSourceMedia();
+        setError("");
+        setPartialText("");
+        hasTranscriptRef.current = session.paragraphs.length > 0;
+        transcriptParagraphSequenceRef.current = session.paragraphs.reduce((highest, paragraph) => Math.max(highest, Number(paragraph.id.slice(2)) + 1 || 0), session.paragraphs.length);
+        setTranscriptParagraphs(session.paragraphs);
+        setParagraphs(session.paragraphs.map((paragraph) => paragraph.text));
+        contextStore.send({ type: "locationTrack", value: session.locationTrack });
+        contextStore.send({ type: "transcriptionEngine", value: session.engine });
+        setRecordingStartedAt(session.startedAt);
+        if (pcmParts.length) {
+            recordedAudio.restore(pcmParts, session.sampleRate);
+            contextStore.send({ type: "hasRecordingAudio", value: true });
+        }
+        if (media && session.media) {
+            sourceMediaUrlRef.current = URL.createObjectURL(media);
+            setSourceMedia({ url: sourceMediaUrlRef.current, kind: session.media.kind, fileName: session.media.fileName });
+        }
+        sessionRef.current = {
+            name: session.name,
+            kind: session.kind,
+            startedAt: session.startedAt,
+            durationMs: session.durationMs,
+            media: session.media,
+            pcmSequence: pcmParts.length
+        };
+        await saveCurrentSession();
+    };
+    const deleteSession = async (name: string) => {
+        if (sessionRef.current?.name === name) {
+            sessionRef.current = null;
+            if (machine.can("PREPARE"))
+                clear();
+        }
+        await sessionWritesRef.current;
+        await deleteStoredSession(name);
+    };
+    /** There is no Stop in the UI: starting something new is what ends a session. */
+    const newSession = async () => {
+        if (machine.value === "recording")
+            await stop();
+        await closeCurrentSession();
+        clear();
+    };
+    const restoreUnfinishedSession = async () => {
+        if (!canPersist())
+            return;
+        try {
+            const [latest] = await listStoredSessions();
+            if (latest && !latest.closed && machine.value === "idle" && state.transcriptParagraphs.length === 0)
+                await openSession(latest.name);
+        }
+        catch {
+            // A damaged or unavailable store must not stop the app from starting.
         }
     };
     const playOpfsRecording = async () => {
@@ -1224,6 +1580,7 @@ export function createTranscriber(...initialInputs: [
         hasTranscriptRef.current = false;
         nextSegmentStartsParagraphRef.current = false;
         transcriptParagraphSequenceRef.current = 0;
+        contextStore.send({ type: "transcriptionEngine", value: "" });
         clearSourceMedia();
     };
     const snapshot = () => ({
@@ -1259,9 +1616,13 @@ export function createTranscriber(...initialInputs: [
         partialText: state.partialText,
         progress: state.progress,
         mediaTranscriptionProgress: state.mediaTranscriptionProgress,
-        sourceActivityRms: state.sourceActivityRms,
         sourceMedia: state.sourceMedia,
+        hasRecordingAudio: state.hasRecordingAudio,
         recordingStartedAt: state.recordingStartedAt,
+        locationTrack: state.locationTrack,
+        locationStatus: state.locationStatus,
+        transcriptionEngine: state.transcriptionEngine,
+        getElapsedMs,
         getRecordingSourceMedia,
         paragraphs: state.paragraphs,
         transcriptParagraphs: state.transcriptParagraphs,
@@ -1278,6 +1639,12 @@ export function createTranscriber(...initialInputs: [
         pause,
         resume,
         transcribeMediaFile,
+        cancelMediaTranscription,
+        editSentence,
+        listSessions,
+        openSession,
+        deleteSession,
+        newSession,
         clear
     });
     const listeners = new Set<() => void>();
@@ -1286,10 +1653,8 @@ export function createTranscriber(...initialInputs: [
         requiresWebGpu = !isWasmTranscriptionModelId(settings.transcription.modelId) &&
             !isMoonshineModelId(settings.transcription.modelId);
         requiresCrossOriginIsolation = isMoonshineModelId(settings.transcription.modelId);
-        isTranscriptionSupported = runtimeSupport.hasWebAssembly &&
-            runtimeSupport.isSecureContext &&
-            (!requiresCrossOriginIsolation || runtimeSupport.hasCrossOriginIsolation) &&
-            (!requiresWebGpu || runtimeSupport.hasWebGpu);
+        isTranscriptionSupported = canUseSelectedModel() ||
+            (runtimeSupport.isSecureContext && settings.transcription.task === "transcribe" && supportsLocalSpeechRecognition());
         isOpfsRecordingAvailable = canUseOpfsRecording();
         isOpfsPlaybackAvailable = canUseOpfsPlayback();
         opfsChunkMs = settings.audio.opfsChunkMs;
@@ -1332,6 +1697,7 @@ export function createTranscriber(...initialInputs: [
                     worker.postMessage({ type: "catalog-status" });
                 }
                 if (data.type === "idle") {
+                    ignoreWorkerResultsRef.current = false;
                     workerIdleResolveRef.current?.();
                     workerIdleResolveRef.current = null;
                     workerIdleRejectRef.current = null;
@@ -1357,10 +1723,10 @@ export function createTranscriber(...initialInputs: [
                         setProgress(data.message);
                     }
                 }
-                if (data.type === "partial") {
+                if (data.type === "partial" && !ignoreWorkerResultsRef.current) {
                     setPartialText(data.text);
                 }
-                if (data.type === "segment") {
+                if (data.type === "segment" && !ignoreWorkerResultsRef.current) {
                     setPartialText("");
                     const normalized = data.text.trim();
                     if (!normalized)
@@ -1421,8 +1787,36 @@ export function createTranscriber(...initialInputs: [
                 worker.terminate();
             };
         });
+        scope.watch("session-autosave", [state.transcriptParagraphs, state.locationTrack], () => {
+            if (!sessionRef.current || autosaveTimerRef.current !== null)
+                return;
+            autosaveTimerRef.current = window.setTimeout(() => {
+                autosaveTimerRef.current = null;
+                void saveCurrentSession();
+            }, AUTOSAVE_DELAY_MS);
+        });
+        scope.watch("page-lifecycle", [], () => {
+            const onVisibilityChange = () => {
+                if (document.visibilityState === "hidden") {
+                    void saveCurrentSession();
+                }
+                else if (machine.value === "recording" && !state.isPaused) {
+                    // Browsers drop the wake lock whenever the page is hidden.
+                    void acquireWakeLock();
+                }
+            };
+            const onPageHide = () => { void saveCurrentSession(); };
+            document.addEventListener("visibilitychange", onVisibilityChange);
+            window.addEventListener("pagehide", onPageHide);
+            return () => {
+                document.removeEventListener("visibilitychange", onVisibilityChange);
+                window.removeEventListener("pagehide", onPageHide);
+            };
+        });
         scope.watch("capture-lifetime", [cleanupMediaSource, cleanupMicrophoneCapture, clearSourceMedia, disposeWaveformWorker, stopAnalyser, stopPlayback], () => {
             return () => {
+                localSpeech?.dispose();
+                localSpeech = null;
                 stopPlayback();
                 stopAnalyser();
                 cleanupMicrophoneCapture();
@@ -1430,6 +1824,9 @@ export function createTranscriber(...initialInputs: [
                 clearSourceMedia();
                 disposeWaveformWorker();
                 geoLocationServiceRef.current.stop();
+                releaseWakeLock();
+                if (autosaveTimerRef.current !== null)
+                    window.clearTimeout(autosaveTimerRef.current);
             };
         });
         scope.flush();
@@ -1438,6 +1835,7 @@ export function createTranscriber(...initialInputs: [
     }
     scope.setRefresh(refresh);
     refresh();
+    void restoreUnfinishedSession();
     let previousInputs: readonly unknown[] = initialInputs;
     return {
         get error() { return snapshot().error; },
@@ -1472,9 +1870,13 @@ export function createTranscriber(...initialInputs: [
         get partialText() { return snapshot().partialText; },
         get progress() { return snapshot().progress; },
         get mediaTranscriptionProgress() { return snapshot().mediaTranscriptionProgress; },
-        get sourceActivityRms() { return snapshot().sourceActivityRms; },
         get sourceMedia() { return snapshot().sourceMedia; },
+        get hasRecordingAudio() { return snapshot().hasRecordingAudio; },
         get recordingStartedAt() { return snapshot().recordingStartedAt; },
+        get locationTrack() { return snapshot().locationTrack; },
+        get locationStatus() { return snapshot().locationStatus; },
+        get transcriptionEngine() { return snapshot().transcriptionEngine; },
+        get getElapsedMs() { return snapshot().getElapsedMs; },
         get getRecordingSourceMedia() { return snapshot().getRecordingSourceMedia; },
         get paragraphs() { return snapshot().paragraphs; },
         get transcriptParagraphs() { return snapshot().transcriptParagraphs; },
@@ -1491,6 +1893,12 @@ export function createTranscriber(...initialInputs: [
         get pause() { return snapshot().pause; },
         get resume() { return snapshot().resume; },
         get transcribeMediaFile() { return snapshot().transcribeMediaFile; },
+        get cancelMediaTranscription() { return snapshot().cancelMediaTranscription; },
+        get editSentence() { return snapshot().editSentence; },
+        get listSessions() { return snapshot().listSessions; },
+        get openSession() { return snapshot().openSession; },
+        get deleteSession() { return snapshot().deleteSession; },
+        get newSession() { return snapshot().newSession; },
         get clear() { return snapshot().clear; },
         get machine() { return machine; },
         update(...inputs: [

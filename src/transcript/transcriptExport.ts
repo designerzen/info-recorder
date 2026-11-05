@@ -1,3 +1,4 @@
+import type { LocatedTranscriptSentence, LocationFix } from "./locatedTranscript";
 import type { RecordingExportFormat, SupertonicVoiceId } from "../config/settings";
 import { getRecordingExportTarget, runFfmpegJob } from "../recorder/audioExport";
 import { splitSpeechPhrases } from "../speech/subtitlePhrases";
@@ -49,6 +50,46 @@ export function captionsToSrt(cues: CaptionCue[], speed = 1, durationMs = Infini
     const text = cue.text.replace(/<[^>]*>/g, "").replace(/\r?\n/g, " ").trim();
     return text ? [{ text, startMs, endMs }] : [];
   }).map((cue, index) => `${index + 1}\n${srtTime(cue.startMs)} --> ${srtTime(cue.endMs)}\n${cue.text}\n`).join("\n");
+}
+
+export function captionsToVtt(cues: CaptionCue[]) {
+  const body = cues.map((cue) => `${srtTime(cue.startMs).replace(",", ".")} --> ${srtTime(cue.endMs).replace(",", ".")}\n${cue.text.replace(/-->/g, "\u2192")}\n`);
+  return `WEBVTT\n\n${body.join("\n")}`;
+}
+
+/** The sentences and route as GeoJSON, with times offset from the start of the recording. */
+export function locatedTranscriptToGeoJson(sentences: LocatedTranscriptSentence[], track: LocationFix[], startedAt: number | null) {
+  const route = track.length > 1 ? [{
+    type: "Feature",
+    properties: { name: "Route" },
+    geometry: { type: "LineString", coordinates: track.map((fix) => [fix.LONG, fix.LAT]) }
+  }] : [];
+  return `${JSON.stringify({
+    type: "FeatureCollection",
+    features: [...route, ...sentences.map((sentence) => ({
+      type: "Feature",
+      properties: {
+        text: sentence.text,
+        sequence: sentence.sequence,
+        startMs: sentence.startMs,
+        endMs: sentence.endMs,
+        time: startedAt === null ? undefined : new Date(startedAt + sentence.startMs).toISOString()
+      },
+      geometry: { type: "Point", coordinates: [sentence.LONG, sentence.LAT] }
+    }))]
+  }, null, 2)}\n`;
+}
+
+export function locatedTranscriptToGpx(sentences: LocatedTranscriptSentence[], track: LocationFix[], startedAt: number | null) {
+  const time = (ms: number) => startedAt === null ? "" : `<time>${new Date(startedAt + ms).toISOString()}</time>`;
+  const waypoints = sentences.map((sentence) => `  <wpt lat="${sentence.LAT}" lon="${sentence.LONG}">${time(sentence.startMs)}<name>${escapeXml(sentence.text)}</name></wpt>`);
+  const points = track.map((fix) => `      <trkpt lat="${fix.LAT}" lon="${fix.LONG}">${time(fix.atMs)}</trkpt>`);
+  const route = points.length ? [`  <trk>\n    <trkseg>\n${points.join("\n")}\n    </trkseg>\n  </trk>`] : [];
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Word Trail" xmlns="http://www.topografix.com/GPX/1/1">\n${[...waypoints, ...route].join("\n")}\n</gpx>\n`;
+}
+
+function escapeXml(value: string) {
+  return value.replace(/[<>&'"]/g, (character) => `&#${character.charCodeAt(0)};`);
 }
 
 function srtTime(ms: number) {

@@ -117,6 +117,7 @@ export type AppSettings = {
     fontFamily: string;
     fontSize: number;
     marginV: number;
+    overlayEnabled: boolean;
   };
   tts: {
     provider: TtsProvider;
@@ -206,7 +207,8 @@ export const appSettings: AppSettings = {
     assDurationSeconds: 60,
     fontFamily: defaultTypeface.assFamily,
     fontSize: 54,
-    marginV: 58
+    marginV: 58,
+    overlayEnabled: false
   },
   tts: {
     provider: "web-speech",

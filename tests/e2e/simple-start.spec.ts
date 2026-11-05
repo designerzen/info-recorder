@@ -9,7 +9,7 @@ test("settings remain reachable before recording and return keyboard focus", asy
   await expect(page.getByRole("dialog", { name: "User settings" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(settings).toBeFocused();
-  await expect(page.locator("button:visible")).toHaveCount(2);
+  await expect(page.locator("button:visible")).toHaveCount(3);
   await expect(page.getByRole("button", { name: "Start recording", exact: true })).toBeEnabled();
 });
 

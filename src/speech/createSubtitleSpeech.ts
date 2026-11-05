@@ -2,7 +2,7 @@ import { createLifecycle, sameInputs } from "../ui/lifecycle";
 import { createPlaybackMachine, createStateMachine } from "../state/machine";
 import { appSettings, type SupertonicVoiceId, type TtsProvider } from "../config/settings";
 import type { RuntimeTtsSettings } from "../config/settingsOptions";
-import type { TranscriptSentence } from "../transcript/timedTranscript";
+import type { TranscriptSentence, TranscriptWord } from "../transcript/timedTranscript";
 import { splitSpeechPhrases } from "./subtitlePhrases";
 export type SubtitleVoiceOption = {
     id: string;
@@ -25,6 +25,7 @@ type ActiveTranscriptPosition = {
     sentenceText: string;
     wordIndex: number;
 };
+const ESTIMATED_SPEECH_CHARS_PER_SECOND = 14;
 export function createSubtitleSpeech(...initialInputs: [
     text: string,
     transcriptSentences: TranscriptSentence[],
@@ -41,10 +42,7 @@ export function createSubtitleSpeech(...initialInputs: [
     scope.own(machine.dispose);
     const contextStore = createStateMachine({
         speechStatus: "",
-        activePhraseIndex: -1,
-        activePhraseText: "",
-        activeSentenceId: (null) as string | null,
-        activeWordIndex: -1,
+        isPlaybackPaused: false,
         webSpeechVoices: ([]) as SpeechSynthesisVoice[]
     }, () => "ready");
     let state = contextStore.context;
@@ -52,10 +50,24 @@ export function createSubtitleSpeech(...initialInputs: [
     scope.own(contextStore.dispose);
     const setIsSpeaking = (value: boolean) => machine.send(value ? "PLAY" : "STOP");
     const setSpeechStatus = (value: typeof state.speechStatus | ((previous: typeof state.speechStatus) => typeof state.speechStatus)) => contextStore.send({ type: "speechStatus", value });
-    const setActivePhraseIndex = (value: typeof state.activePhraseIndex | ((previous: typeof state.activePhraseIndex) => typeof state.activePhraseIndex)) => contextStore.send({ type: "activePhraseIndex", value });
-    const setActivePhraseText = (value: typeof state.activePhraseText | ((previous: typeof state.activePhraseText) => typeof state.activePhraseText)) => contextStore.send({ type: "activePhraseText", value });
-    const setActiveSentenceId = (value: typeof state.activeSentenceId | ((previous: typeof state.activeSentenceId) => typeof state.activeSentenceId)) => contextStore.send({ type: "activeSentenceId", value });
-    const setActiveWordIndex = (value: typeof state.activeWordIndex | ((previous: typeof state.activeWordIndex) => typeof state.activeWordIndex)) => contextStore.send({ type: "activeWordIndex", value });
+    // The playing position changes many times a second, so it is published to position
+    // listeners instead of state; re-rendering a long transcript per word is far too slow.
+    let activePhraseIndex = -1;
+    let activePhraseText = "";
+    let activeSentenceId: string | null = null;
+    let activeWordIndex = -1;
+    const positionListeners = new Set<() => void>();
+    const notifyPosition = () => { for (const listener of positionListeners) listener(); };
+    const setActivePhraseIndex = (value: number) => { activePhraseIndex = value; };
+    const setActivePhraseText = (value: string) => { if (activePhraseText !== value) { activePhraseText = value; notifyPosition(); } };
+    const setActiveSentenceId = (value: string | null) => { if (activeSentenceId !== value) { activeSentenceId = value; notifyPosition(); } };
+    const setActiveWordIndex = (value: number) => { if (activeWordIndex !== value) { activeWordIndex = value; notifyPosition(); } };
+    const setIsPlaybackPaused = (value: boolean) => contextStore.send({ type: "isPlaybackPaused", value });
+    const sentenceQueueRef: {
+        current: { sentences: TranscriptSentence[]; index: number } | null;
+    } = { current: null };
+    const isFullMediaPlaybackRef = { current: false };
+    let playbackRate = 1;
     const setWebSpeechVoices = (value: typeof state.webSpeechVoices | ((previous: typeof state.webSpeechVoices) => typeof state.webSpeechVoices)) => contextStore.send({ type: "webSpeechVoices", value });
     const spokenTextRef = { current: "" };
     const mediaRef: {
@@ -89,6 +101,9 @@ export function createSubtitleSpeech(...initialInputs: [
     const setIsSpeechEnabled = (value: boolean) => setSettingsValue({ enabled: value });
     const setSelectedVoiceId = (value: string) => setSettingsValue({ selectedVoiceId: value });
     const resetActiveSpeech = () => {
+        sentenceQueueRef.current = null;
+        isFullMediaPlaybackRef.current = false;
+        setIsPlaybackPaused(false);
         setIsSpeaking(false);
         setSpeechStatus("");
         setActivePhraseIndex(-1);
@@ -96,7 +111,7 @@ export function createSubtitleSpeech(...initialInputs: [
         setActiveSentenceId(null);
         setActiveWordIndex(-1);
     };
-    const stopSpeaking = () => {
+    const interruptCurrentOutput = () => {
         speechRunRef.current += 1;
         if (pendingTimeoutRef.current !== null) {
             window.clearTimeout(pendingTimeoutRef.current);
@@ -124,6 +139,9 @@ export function createSubtitleSpeech(...initialInputs: [
             URL.revokeObjectURL(mediaUrlRef.current);
             mediaUrlRef.current = null;
         }
+    };
+    const stopSpeaking = () => {
+        interruptCurrentOutput();
         resetActiveSpeech();
     };
     const connectNormalizedSourceMedia = async (element: HTMLMediaElement) => {
@@ -159,10 +177,12 @@ export function createSubtitleSpeech(...initialInputs: [
             return;
         stopSpeaking();
         const runId = speechRunRef.current;
+        isFullMediaPlaybackRef.current = true;
         const element = document.createElement(sourceMedia.kind === "video" ? "video" : "audio");
         element.volume = settings.volume;
         element.preload = "auto";
         element.src = sourceMedia.url;
+        element.playbackRate = playbackRate;
         mediaRef.current = element;
         const sentences = transcriptPlayback?.sentences ?? transcriptSentences;
         setActivePhraseText(sentences[0]?.text ?? (mode === "normalized" ? "Normalised audio" : "Original audio"));
@@ -188,7 +208,7 @@ export function createSubtitleSpeech(...initialInputs: [
             if (speechRunRef.current !== runId || mediaRef.current !== element)
                 return;
             setIsSpeaking(true);
-            if (sentences.length > 0) {
+            if (sentences.length > 0 && wordFrameRef.current === null) {
                 wordFrameRef.current = window.requestAnimationFrame(tick);
             }
         };
@@ -354,6 +374,7 @@ export function createSubtitleSpeech(...initialInputs: [
         element.volume = settings.volume;
         element.preload = "auto";
         element.src = sourceMedia.url;
+        element.playbackRate = playbackRate;
         mediaRef.current = element;
         setActiveSentenceId(sentence.id);
         setActiveWordIndex(0);
@@ -364,9 +385,7 @@ export function createSubtitleSpeech(...initialInputs: [
         const tick = () => {
             if (speechRunRef.current !== runId || mediaRef.current !== element)
                 return;
-            const currentMs = element.currentTime * 1000;
-            const activeIndex = sentence.words.findIndex((word) => currentMs >= word.startMs && currentMs < word.endMs);
-            setActiveWordIndex(activeIndex === -1 ? sentence.words.length - 1 : activeIndex);
+            setActiveWordIndex(getActiveWordIndex(sentence.words, element.currentTime * 1000));
             if (element.currentTime >= endSeconds) {
                 element.pause();
                 resetActiveSpeech();
@@ -378,7 +397,8 @@ export function createSubtitleSpeech(...initialInputs: [
             if (speechRunRef.current !== runId || mediaRef.current !== element)
                 return;
             setIsSpeaking(true);
-            wordFrameRef.current = window.requestAnimationFrame(tick);
+            if (wordFrameRef.current === null)
+                wordFrameRef.current = window.requestAnimationFrame(tick);
         };
         element.onpause = () => {
             if (element.currentTime >= endSeconds && speechRunRef.current === runId) {
@@ -430,7 +450,7 @@ export function createSubtitleSpeech(...initialInputs: [
             })();
         };
     };
-    const speakSentenceWithWebSpeech = (sentence: TranscriptSentence, runId: number) => {
+    const speakSentenceWithWebSpeech = (sentence: TranscriptSentence, runId: number, onDone: () => void = resetActiveSpeech) => {
         if (!isSpeechSupported)
             return;
         const nativeVoice = state.webSpeechVoices.find((voice) => voice.voiceURI === selectedVoiceId);
@@ -438,12 +458,28 @@ export function createSubtitleSpeech(...initialInputs: [
         const ranges = getWordCharRanges(sentence);
         utterance.lang = nativeVoice?.lang ?? appSettings.tts.lang;
         utterance.voice = nativeVoice ?? null;
-        utterance.rate = settings.rate;
+        utterance.rate = Math.min(10, settings.rate * playbackRate);
         utterance.pitch = settings.pitch;
         utterance.volume = settings.volume;
+        // Many voices never report word boundaries, so estimate until one proves otherwise.
+        let hasBoundaries = false;
+        let estimatedElapsedMs = 0;
+        let lastFrameAt = 0;
+        const estimatedDurationMs = sentence.text.length / (ESTIMATED_SPEECH_CHARS_PER_SECOND * utterance.rate) * 1000;
+        const estimateWord = (now: number) => {
+            if (speechRunRef.current !== runId || hasBoundaries)
+                return;
+            if (!state.isPlaybackPaused)
+                estimatedElapsedMs += now - lastFrameAt;
+            lastFrameAt = now;
+            setActiveWordIndex(getWordIndexAtProgress(sentence.words, estimatedElapsedMs / estimatedDurationMs));
+            wordFrameRef.current = window.requestAnimationFrame(estimateWord);
+        };
         utterance.onstart = () => {
             if (speechRunRef.current !== runId)
                 return;
+            lastFrameAt = performance.now();
+            wordFrameRef.current = window.requestAnimationFrame(estimateWord);
             setActiveSentenceId(sentence.id);
             setActiveWordIndex(0);
             setActivePhraseText(sentence.text);
@@ -453,14 +489,17 @@ export function createSubtitleSpeech(...initialInputs: [
         utterance.onboundary = (event) => {
             if (speechRunRef.current !== runId)
                 return;
+            hasBoundaries = true;
             const boundaryIndex = ranges.findIndex((range) => event.charIndex >= range.start && event.charIndex < range.end);
             if (boundaryIndex >= 0) {
                 setActiveWordIndex(boundaryIndex);
             }
         };
         utterance.onend = () => {
-            if (speechRunRef.current === runId)
-                resetActiveSpeech();
+            if (speechRunRef.current === runId) {
+                hasBoundaries = true;
+                onDone();
+            }
         };
         utterance.onerror = () => {
             if (speechRunRef.current !== runId)
@@ -471,7 +510,7 @@ export function createSubtitleSpeech(...initialInputs: [
         window.speechSynthesis.cancel();
         window.speechSynthesis.speak(utterance);
     };
-    const speakSentenceWithSupertonic = async (sentence: TranscriptSentence, runId: number) => {
+    const speakSentenceWithSupertonic = async (sentence: TranscriptSentence, runId: number, onDone: () => void = resetActiveSpeech) => {
         try {
             const { synthesizeSupertonicSpeech } = await import("./supertonicTts");
             const voiceId = appSettings.tts.supertonic.voices.some((voice) => voice.id === selectedVoiceId)
@@ -489,37 +528,39 @@ export function createSubtitleSpeech(...initialInputs: [
             mediaUrlRef.current = url;
             const audio = new Audio(url);
             audio.volume = settings.volume;
+            audio.playbackRate = playbackRate;
             mediaRef.current = audio;
-            const wordWeights = sentence.words.map((word) => Math.max(1, word.text.trim().length));
-            const totalWeight = wordWeights.reduce((sum, value) => sum + value, 0);
             const tick = () => {
-                if (speechRunRef.current !== runId || mediaRef.current !== audio || !Number.isFinite(audio.duration)) {
+                if (speechRunRef.current !== runId || mediaRef.current !== audio)
                     return;
-                }
-                const progress = audio.currentTime / Math.max(0.001, audio.duration);
-                let running = 0;
-                let nextIndex = 0;
-                for (let index = 0; index < wordWeights.length; index += 1) {
-                    running += wordWeights[index] / Math.max(1, totalWeight);
-                    if (progress <= running) {
-                        nextIndex = index;
-                        break;
-                    }
-                    nextIndex = index;
-                }
-                setActiveWordIndex(nextIndex);
+                if (Number.isFinite(audio.duration))
+                    setActiveWordIndex(getWordIndexAtProgress(sentence.words, audio.currentTime / Math.max(0.001, audio.duration)));
                 wordFrameRef.current = window.requestAnimationFrame(tick);
             };
             audio.onplay = () => {
                 setSpeechStatus(`Speaking sentence with Supertonic ${selectedVoiceId}.`);
-                wordFrameRef.current = window.requestAnimationFrame(tick);
+                if (wordFrameRef.current === null)
+                    wordFrameRef.current = window.requestAnimationFrame(tick);
             };
-            audio.onended = () => resetActiveSpeech();
+            audio.onended = () => {
+                if (speechRunRef.current !== runId)
+                    return;
+                if (wordFrameRef.current !== null) {
+                    window.cancelAnimationFrame(wordFrameRef.current);
+                    wordFrameRef.current = null;
+                }
+                URL.revokeObjectURL(url);
+                if (mediaUrlRef.current === url)
+                    mediaUrlRef.current = null;
+                mediaRef.current = null;
+                onDone();
+            };
             audio.onerror = () => {
                 resetActiveSpeech();
                 setSpeechStatus("Supertonic audio playback failed.");
             };
-            await audio.play();
+            if (!state.isPlaybackPaused)
+                await audio.play();
         }
         catch (error) {
             if (speechRunRef.current !== runId)
@@ -528,8 +569,76 @@ export function createSubtitleSpeech(...initialInputs: [
             setSpeechStatus(error instanceof Error ? error.message : "Supertonic speech synthesis failed.");
         }
     };
+    const speakQueuedSentence = (runId: number) => {
+        const queue = sentenceQueueRef.current;
+        if (!queue || speechRunRef.current !== runId)
+            return;
+        const sentence = queue.sentences[queue.index];
+        if (!sentence) {
+            resetActiveSpeech();
+            return;
+        }
+        const speakNext = () => {
+            queue.index += 1;
+            speakQueuedSentence(runId);
+        };
+        if (provider === "web-speech")
+            speakSentenceWithWebSpeech(sentence, runId, speakNext);
+        else
+            void speakSentenceWithSupertonic(sentence, runId, speakNext);
+    };
+    /** Read sentences in order with the selected voice, highlighting each word. */
+    const playAll = (sentences: TranscriptSentence[]) => {
+        if (!isSelectedProviderSupported || sentences.length === 0)
+            return;
+        stopSpeaking();
+        sentenceQueueRef.current = { sentences, index: 0 };
+        speakQueuedSentence(speechRunRef.current);
+    };
+    /** During whole-transcript playback, pressing a sentence continues from there. */
+    const seekToSentence = (sentence: TranscriptSentence) => {
+        if (isFullMediaPlaybackRef.current && mediaRef.current && sentence.endMs > sentence.startMs) {
+            mediaRef.current.currentTime = sentence.startMs / 1000;
+            if (state.isPlaybackPaused)
+                resumePlayback();
+            return true;
+        }
+        const queue = sentenceQueueRef.current;
+        const index = queue?.sentences.findIndex((item) => item.id === sentence.id) ?? -1;
+        if (!queue || index < 0)
+            return false;
+        interruptCurrentOutput();
+        queue.index = index;
+        setIsPlaybackPaused(false);
+        speakQueuedSentence(speechRunRef.current);
+        return true;
+    };
+    const pausePlayback = () => {
+        if (machine.value !== "playing" || state.isPlaybackPaused)
+            return;
+        setIsPlaybackPaused(true);
+        if (mediaRef.current)
+            mediaRef.current.pause();
+        else if (isSpeechSupported)
+            window.speechSynthesis.pause();
+    };
+    const resumePlayback = () => {
+        if (!state.isPlaybackPaused)
+            return;
+        setIsPlaybackPaused(false);
+        if (mediaRef.current)
+            void mediaRef.current.play();
+        else if (isSpeechSupported)
+            window.speechSynthesis.resume();
+    };
+    const setPlaybackRate = (rate: number) => {
+        // Browser voices cannot change mid-utterance, so they pick this up from the next sentence.
+        playbackRate = rate;
+        if (mediaRef.current)
+            mediaRef.current.playbackRate = rate;
+    };
     const playSentence = (sentence: TranscriptSentence, sourceMedia: SourceMediaPlayback | null, mode: RuntimeTtsSettings["sentencePlaybackMode"], sourceMode: SourceMediaPlaybackMode = "original") => {
-        if (state.activeSentenceId === sentence.id && (machine.value === "playing")) {
+        if (activeSentenceId === sentence.id && (machine.value === "playing")) {
             stopSpeaking();
             return;
         }
@@ -568,10 +677,12 @@ export function createSubtitleSpeech(...initialInputs: [
         isSpeechEnabled,
         isSpeechSupported: isSelectedProviderSupported,
         isSpeaking: (machine.value === "playing"),
-        activePhraseIndex: state.activePhraseIndex,
-        activePhraseText: state.activePhraseText,
-        activeSentenceId: state.activeSentenceId,
-        activeWordIndex: state.activeWordIndex,
+        activePhraseIndex,
+        activePhraseText,
+        activeSentenceId,
+        activeWordIndex,
+        isPlaybackPaused: state.isPlaybackPaused,
+        isPlayingAll: sentenceQueueRef.current !== null || isFullMediaPlaybackRef.current,
         provider,
         selectedVoiceId,
         speechStatus: state.speechStatus,
@@ -585,6 +696,11 @@ export function createSubtitleSpeech(...initialInputs: [
         speakText: (value: string) => speak(value, { force: true }),
         playSourceMedia,
         playSentence,
+        playAll,
+        seekToSentence,
+        pausePlayback,
+        resumePlayback,
+        setPlaybackRate,
         stopSpeaking
     });
     const listeners = new Set<() => void>();
@@ -673,6 +789,13 @@ export function createSubtitleSpeech(...initialInputs: [
         get speakText() { return snapshot().speakText; },
         get playSourceMedia() { return snapshot().playSourceMedia; },
         get playSentence() { return snapshot().playSentence; },
+        get isPlaybackPaused() { return snapshot().isPlaybackPaused; },
+        get isPlayingAll() { return snapshot().isPlayingAll; },
+        get playAll() { return snapshot().playAll; },
+        get seekToSentence() { return snapshot().seekToSentence; },
+        get pausePlayback() { return snapshot().pausePlayback; },
+        get resumePlayback() { return snapshot().resumePlayback; },
+        get setPlaybackRate() { return snapshot().setPlaybackRate; },
         get stopSpeaking() { return snapshot().stopSpeaking; },
         get machine() { return machine; },
         update(...inputs: [
@@ -683,7 +806,8 @@ export function createSubtitleSpeech(...initialInputs: [
         ]) { if (sameInputs(previousInputs, inputs))
             return; previousInputs = inputs; [text, transcriptSentences, settings, setSettingsValue] = inputs; refresh(); },
         subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        dispose() { scope.dispose(); listeners.clear(); }
+        subscribePosition(listener: () => void) { positionListeners.add(listener); return () => { positionListeners.delete(listener); }; },
+        dispose() { scope.dispose(); listeners.clear(); positionListeners.clear(); }
     };
 }
 export function getActiveTranscriptPosition(sentences: TranscriptSentence[], currentMs: number): ActiveTranscriptPosition | null {
@@ -703,13 +827,32 @@ export function getActiveTranscriptPosition(sentences: TranscriptSentence[], cur
             wordIndex: -1
         };
     }
-    const activeWordIndex = activeSentence.words.findIndex((word) => currentMs >= word.startMs && currentMs < word.endMs);
-    const fallbackWordIndex = currentMs < activeSentence.words[0].startMs ? 0 : activeSentence.words.length - 1;
     return {
         sentenceId: activeSentence.id,
         sentenceText: activeSentence.text,
-        wordIndex: activeWordIndex === -1 ? fallbackWordIndex : activeWordIndex
+        wordIndex: getActiveWordIndex(activeSentence.words, currentMs)
     };
+}
+/** The last word to have started, so the highlight rests on it through any following gap. */
+export function getActiveWordIndex(words: TranscriptWord[], currentMs: number) {
+    if (words.length === 0)
+        return -1;
+    let index = 0;
+    while (index + 1 < words.length && words[index + 1].startMs <= currentMs)
+        index += 1;
+    return index;
+}
+/** Map 0-1 progress through a sentence onto its words, weighted by word length. */
+export function getWordIndexAtProgress(words: TranscriptWord[], progress: number) {
+    const weights = words.map((word) => Math.max(1, word.text.trim().length));
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    let running = 0;
+    for (let index = 0; index < weights.length; index += 1) {
+        running += weights[index] / total;
+        if (progress <= running)
+            return index;
+    }
+    return words.length - 1;
 }
 function getWordCharRanges(sentence: TranscriptSentence) {
     let offset = 0;

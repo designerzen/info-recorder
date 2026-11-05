@@ -42,7 +42,9 @@ export async function readButton(button: Locator) {
       labels.push({ text, ratio: ratio(blend(rgba(parentStyle.color), parentBg), parentBg), size: parseFloat(parentStyle.fontSize) });
     }
     const surrounding = background(element.parentElement);
-    const centre = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    // Wrapped running text has gaps between its lines, so sample its first line.
+    const line = element.getClientRects()[0] ?? rect;
+    const centre = document.elementFromPoint(line.x + line.width / 2, line.y + line.height / 2);
     let clipped = false;
     for (let parent = element.parentElement; parent; parent = parent.parentElement) {
       const parentStyle = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
@@ -51,6 +53,7 @@ export async function readButton(button: Locator) {
     }
     return {
       name: element.getAttribute("aria-label") || element.textContent?.trim() || element.getAttribute("title"),
+      isRunningText: element.matches(".sentence-button"),
       width: rect.width, height: rect.height, labels,
       iconContrast: ratio(blend(rgba(style.color), bg), bg),
       background: style.backgroundColor, backgroundImage: style.backgroundImage,
@@ -70,13 +73,16 @@ export async function assertButton(button: Locator, state: string) {
   const paint = await readButton(button);
   const context = `${paint.name} (${state}): ${JSON.stringify(paint)}`;
   expect(paint.name, context).toBeTruthy();
-  expect(paint.width, context).toBeGreaterThanOrEqual(43.99);
-  expect(paint.height, context).toBeGreaterThanOrEqual(43.99);
+  // Transcript sentences flow as text: exempt from target size and boundary, not from focus or contrast.
+  if (!paint.isRunningText) {
+    expect(paint.width, context).toBeGreaterThanOrEqual(43.99);
+    expect(paint.height, context).toBeGreaterThanOrEqual(43.99);
+    expect(paint.boundaryContrast, context).toBeGreaterThanOrEqual(3);
+  }
   expect(paint.opacity, context).toBe("1");
   expect(paint.filter, context).toBe("none");
   expect(paint.backgroundImage, context).toBe("none");
   expect(paint.fontSize, context).toBeGreaterThanOrEqual(16);
-  expect(paint.boundaryContrast, context).toBeGreaterThanOrEqual(3);
   expect(paint.iconContrast, context).toBeGreaterThanOrEqual(7);
   for (const label of paint.labels) {
     expect(label.ratio, context).toBeGreaterThanOrEqual(7);

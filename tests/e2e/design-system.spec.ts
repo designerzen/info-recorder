@@ -12,6 +12,7 @@ themes.push({ name: "Adversarial custom colours", settings: {
 
 async function openTheme(page: Page, settings = defaultPageStyle) {
   await page.goto(`/?pageStyle=${encodePageStyle(settings)}`);
+  await expect(page.locator(".app-shell .record-button")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 }
 
@@ -63,7 +64,7 @@ async function transcriptFixture(page: Page, recording = false) {
         paragraphs:['A thought worth keeping.'], partialText:'',
         audioParts:[{name:'part-0',sequence:0,startIso:'2026-10-22T12:00:00Z',endIso:'2026-10-22T12:00:08Z',LAT:51.5,LONG:-0.12}],
         recordingStartedAt:${Date.parse("2026-10-22T12:00:00Z")}, opfsChunkCount:0,sourceMedia:null,
-        isTranscriptionSupported:true,runtimeSupport:{},modelInventory:[],
+        locationTrack:[{atMs:0,LAT:51.5,LONG:-0.12}],locationStatus:'off',listSessions:async()=>[],getElapsedMs:()=>0,newSession:()=>{},isTranscriptionSupported:true,runtimeSupport:{},modelInventory:[],
         modelLoadMessage:'',modelLoadProgress:0,modelDownloadSpeedBps:0,
         isRecording:${recording},isPreparing:false,isTranscribingMedia:false,isModelLoading:false,
         sourceActivityRms:0.01,setWaveformCanvas:noop,start:noop,stop:noop
@@ -101,7 +102,7 @@ test("recording and disabled controls preserve the button contract", async ({ pa
   await page.emulateMedia({ reducedMotion: "reduce" });
   await transcriptFixture(page, true);
   await openTheme(page);
-  await expect(page.getByRole("button", { name: "Upload media", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Upload media", exact: true })).toBeDisabled();
   await auditButtons(page, page.locator(".app-shell"));
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await auditButtons(page, page.getByRole("dialog"));
