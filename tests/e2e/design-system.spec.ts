@@ -86,7 +86,10 @@ for (const width of [1280, 390]) {
       await openTheme(page, pageStylePresets.find((preset) => preset.value === name)!.settings);
       await expect(page.locator(".sentence-button")).toBeVisible();
       await auditButtons(page, page.locator(".app-shell"));
+      await page.locator(".transcript-download-menu > summary").click();
+      await auditButtons(page, page.locator(".more-panel"));
       await page.getByLabel("Transcript playback voice").selectOption("web:design-test");
+      await page.keyboard.press("Escape");
       await page.getByRole("tab", { name: "Map", exact: true }).click();
       await expect(page.getByRole("button", { name: "Zoom in", exact: true })).toBeVisible();
       await auditButtons(page, page.locator(".app-shell"));

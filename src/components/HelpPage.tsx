@@ -24,15 +24,16 @@ export function HelpPage() {
         <section aria-labelledby="help-review">
           <span className="section-eyebrow">02 / REVIEW & LISTEN</span>
           <h2 id="help-review">Follow your words</h2>
-          <p>Read the text in <strong>Transcript</strong>. Select a completed sentence to hear it, or use <strong>Play transcript</strong> to listen to the passage.</p>
-          <p>The <strong>Voice</strong> menu lets you choose original audio, normalised audio, a browser voice, or a local model voice. Local model voices need WebGPU and download their files on first use.</p>
+          <p>Read the text in <strong>Transcript</strong>. Select a completed sentence to hear it, or use the <strong>Play</strong> button to listen to the passage.</p>
+          <p>The <strong>Voice</strong> list under <strong>More options</strong> (the three dots) lets you choose original audio, normalised audio, a browser voice, or a local model voice. Local model voices need WebGPU and download their files on first use.</p>
           <p>Use <strong>Map</strong> to see where recorded phrases were captured when location is available. Your browser may ask for location permission; without it, phrases can have an unknown location.</p>
+          <p><strong>Using a keyboard?</strong> Press Tab to reach the controls, the search box and then the sentences, and Enter or Space to play one. In the search box, Enter finds the next match and Shift+Enter the previous one. <strong>Go to sentence</strong> moves you to the match, and Escape brings you back to the search box.</p>
         </section>
 
         <section aria-labelledby="help-save">
           <span className="section-eyebrow">03 / KEEP A COPY</span>
           <h2 id="help-save">Download your work</h2>
-          <p>Once text appears, use <strong>Download text</strong> to save it. After recording and transcription finish, choose an audio source and format, then select <strong>Download audio</strong>. You can also adjust the download speed and pitch.</p>
+          <p>Once text appears, open <strong>More options</strong> (the three dots) and use <strong>Download text</strong> to save it. After recording and transcription finish, choose an audio source and format, then select <strong>Download audio</strong>. You can also adjust the download speed and pitch.</p>
           <p><strong>Download captioned video</strong> creates an MP4 with the selected audio, a plain background, and switchable captions. Turn captions on in your video player.</p>
           <p>Save anything you want to keep before reloading or closing the page. Browser storage is local to this browser and device, and clearing site data removes cached files.</p>
         </section>

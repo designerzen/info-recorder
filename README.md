@@ -15,7 +15,7 @@ Microphone transcription defaults to browser speech recognition only when `proce
 - Whole-transcript karaoke playback that keeps the current word in view, using recorded audio or a voice, with pause, speed, and pressing a sentence to continue from it
 - A map of where each sentence was spoken, with the route, a timeline slider and playback following along
 - Automatic saving with restore after a reload or crash; earlier recordings are listed in Settings
-- Sentence correction, search and copy
+- Sentence correction, search and copy, with keyboard jumps from search to a matching sentence and back
 - Text, SRT, VTT, GPX, GeoJSON, audio and captioned video downloads
 - Screen wake lock while recording, and a clear pause if the microphone is disconnected
 - Moonshine models through the official browser WASM runtime, and Whisper through Transformers.js WebGPU or whisper.cpp WASM

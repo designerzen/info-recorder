@@ -3,7 +3,7 @@ import { createLifecycle, sameInputs } from "./ui/lifecycle";
 import { createNavigationMachine, createStateMachine } from "./state/machine";
 import { TranslationSettings } from "./components/TranslationSettings";
 import { createBrowserTranslation } from "./translation/createBrowserTranslation";
-import { Circle, FileText, Map, Play, Square, Upload } from "./ui/icons";
+import { CornerDownRight, Ellipsis, Play, Search, Square, Upload } from "./ui/icons";
 import "./styles.css";
 import "./studio.css";
 import "./settings.css";
@@ -82,6 +82,12 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
     } = { current: null };
     const searchCountRef: {
         current: HTMLElement | null;
+    } = { current: null };
+    const searchInputRef: {
+        current: HTMLInputElement | null;
+    } = { current: null };
+    const searchGoRef: {
+        current: HTMLButtonElement | null;
     } = { current: null };
     const sentencesByParagraph = new WeakMap<TranscriptParagraphData, ReturnType<typeof splitParagraphIntoSentences>>();
     let isHelpPage = state.currentPage === '#help';
@@ -279,21 +285,49 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
         searchRef.matches = needle && panel ? Array.from(panel.querySelectorAll(".sentence-button")).filter((element) => element.textContent?.toLowerCase().includes(needle)) : [];
         searchRef.matches.forEach((element) => element.classList.add("search-match"));
         searchRef.index = Math.min(searchRef.index, searchRef.matches.length - 1);
+        searchRef.matches[searchRef.index]?.classList.add("search-current");
         renderSearchCount();
     };
     const renderSearchCount = () => {
         if (searchCountRef.current)
             searchCountRef.current.textContent = searchRef.query.trim() ? `${searchRef.index + 1}/${searchRef.matches.length}` : "";
+        if (searchGoRef.current)
+            searchGoRef.current.hidden = !searchRef.matches.length;
     };
-    const goToNextMatch = () => {
+    const goToMatch = (step: 1 | -1 = 1) => {
         if (!searchRef.matches.length)
             return;
         searchRef.matches[searchRef.index]?.classList.remove("search-current");
-        searchRef.index = (searchRef.index + 1) % searchRef.matches.length;
+        const { length } = searchRef.matches;
+        searchRef.index = step === 1 || searchRef.index >= 0 ? (searchRef.index + step + length) % length : length - 1;
         const match = searchRef.matches[searchRef.index];
         match.classList.add("search-current");
         match.scrollIntoView({ block: "center" });
         renderSearchCount();
+    };
+    // Typing stays in the search box, so moving to the sentence is its own step. Escape comes back.
+    const focusCurrentMatch = () => {
+        if (searchRef.index < 0)
+            goToMatch();
+        // The match may be behind the map, and a hidden element cannot take focus.
+        setWorkspaceView("transcript");
+        requestAnimationFrame(() => {
+            const match = searchRef.matches[searchRef.index] as HTMLElement | undefined;
+            match?.focus({ preventScroll: true });
+            match?.scrollIntoView({ block: "center" });
+        });
+    };
+    const closeMoreMenu = (focusSummary = false) => {
+        const menu = document.querySelector<HTMLDetailsElement>(".transcript-download-menu[open]");
+        if (!menu)
+            return;
+        menu.open = false;
+        if (focusSummary)
+            menu.querySelector("summary")?.focus();
+    };
+    const returnToSearch = (event: KeyboardEvent) => {
+        if (event.key === "Escape" && searchRef.query.trim() && (event.target as Element).matches(".sentence-button"))
+            searchInputRef.current?.focus();
     };
     // Word highlighting writes to the DOM directly: see subscribePosition in createSubtitleSpeech.
     const highlightRef: {
@@ -427,9 +461,12 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
         const hasTranscript = playbackText.length > 0;
         const hasWorkspace = hasTranscript || recorder.isRecording || recorder.isPreparing || isBusyTranscribingMedia;
         const capturing = recorder.isRecording && !recorder.isPaused;
-        const showCapture = (recorder.isRecording || recorder.isPreparing) && !isBusyTranscribingMedia;
+        const showCapture = recorder.isRecording && !recorder.isPreparing && !isBusyTranscribingMedia;
         const buttonLabel = capturing ? "Pause recording" : recorder.isPaused ? "Resume recording" : "Start recording";
         const captureLabel = recorder.isPreparing ? "Starting" : recorder.isPaused ? "Paused" : recorder.isModelLoading ? "Recording, preparing transcription" : "Recording";
+        const isWorking = recorder.isPreparing || recorder.isChangingCapture || recorder.isModelLoading || isBusyTranscribingMedia;
+        const recordState = capturing ? "recording" : recorder.isPaused ? "paused" : "idle";
+        const workProgress = isBusyTranscribingMedia ? recorder.mediaTranscriptionProgress : recorder.isModelLoading && recorder.modelLoadProgress > 0 ? recorder.modelLoadProgress : null;
         // Uploaded media has no location, so the map only exists for recordings.
         const canShowMap = !recorder.sourceMedia;
         const view = canShowMap ? state.workspaceView : "transcript";
@@ -473,40 +510,9 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
             />
             {page ? <div className="app-document" inert={machine.value.endsWith("-settings")}>{page}</div> : <div className="app-layout" inert={machine.value.endsWith("-settings")}>
               <h1 className="sr-only" id="recorder-title" tabIndex={-1}>Word Trail</h1>
-              <header className="workspace-toolbar">
-                {hasWorkspace ? <div className="workspace-tabs" role="tablist" aria-label="Workspace view">
-                  {views.map(item => <button key={item} id={`${item}-tab`} type="button" role="tab"
-                    aria-selected={view === item} aria-controls={`${item}-panel`} tabIndex={view === item ? 0 : -1}
-                    onClick={() => setWorkspaceView(item)} onKeyDown={(event: KeyboardEvent) => {
-                      if (!canShowMap || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                      event.preventDefault();
-                      const next = event.key === "Home" ? "transcript" : event.key === "End" ? "map" : item === "map" ? "transcript" : "map";
-                      setWorkspaceView(next); document.getElementById(`${next}-tab`)?.focus();
-                    }}>{item === "map" ? <Map size={18} /> : <FileText size={18} />}{item === "map" ? "Map" : "Transcript"}</button>)}
-                </div> : null}
-                <div className="workspace-actions">
-                  {hasTranscript || recorder.isPaused ? <button className="new-session-button" type="button" onClick={startNewSession} disabled={capturing || isBusyTranscribingMedia || isBlocking}
-                    aria-label="New recording" title="Save this and start again"><Circle size={18} /><span>New</span></button> : null}
-                  <button className="upload-button" type="button" onClick={() => mediaInputRef.current?.click()} aria-label="Upload media" title="Upload media"
-                    disabled={capturing || recorder.isPreparing || recorder.isChangingCapture || recorder.isModelLoading || isBusyTranscribingMedia}><Upload size={18} /><span>Upload</span></button>
-                  <input ref={mediaInputRef} className="media-input" hidden type="file" accept="audio/*,video/*" onChange={handleMediaInputChange} />
-                  <button className="settings-button" type="button" onClick={() => setIsSettingsOpen(true)} aria-label="Settings" title="Settings">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  </button>
-                </div>
-              </header>
+              {/* First in Tab order, though shown below: a long transcript must not stand between Tab and Record. */}
               <div className="record-control">
-                <button className="record-button" type="button" onClick={toggleRecording}
-                  disabled={recorder.isPreparing || recorder.isChangingCapture || recorder.isTranscribingMedia || !recorder.isTranscriptionSupported}
-                  aria-label={buttonLabel} title={buttonLabel} aria-busy={recorder.isPreparing || recorder.isChangingCapture}>
-                  {capturing ? <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="3" width="5" height="18" rx="1" /><rect x="14" y="3" width="5" height="18" rx="1" /></svg> : <Circle size={24} />}
-                  <span>{recorder.isPreparing ? "Starting" : capturing ? "Pause" : recorder.isPaused ? "Resume" : "Record"}</span>
-                </button>
                 {showCapture ? <div className="live-capture" data-state={recorder.isPaused ? "paused" : recorder.isPreparing ? "starting" : "recording"}>
-                  <span className="live-capture-indicator" aria-hidden="true" />
                   <span className="live-capture-label" role="status">{captureLabel}</span>
                   <span ref={timerRef} className="live-capture-timer" role="timer" aria-live="off" aria-label="Recording duration">{formatClock(recorder.getElapsedMs())}</span>
                   <canvas ref={recorder.setWaveformCanvas} className="live-capture-waveform" aria-hidden="true" />
@@ -516,10 +522,102 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
                   <progress max={100} value={recorder.mediaTranscriptionProgress} aria-label="Transcription progress" />
                   <button type="button" onClick={() => recorder.cancelMediaTranscription()}>Cancel</button>
                 </div> : null}
+                <div className="record-dock">
+                  <button className="upload-button" type="button" onClick={() => mediaInputRef.current?.click()} aria-label="Upload media" title="Upload media"
+                    disabled={capturing || recorder.isPreparing || recorder.isChangingCapture || recorder.isModelLoading || isBusyTranscribingMedia}><Upload size={22} /></button>
+                  <input ref={mediaInputRef} className="media-input" hidden type="file" accept="audio/*,video/*" onChange={handleMediaInputChange} />
+                  <button className="record-button" type="button" onClick={toggleRecording} data-state={recordState} data-working={isWorking ? "true" : undefined}
+                    disabled={recorder.isPreparing || recorder.isChangingCapture || recorder.isTranscribingMedia || !recorder.isTranscriptionSupported}
+                    aria-label={buttonLabel} title={buttonLabel} aria-busy={isWorking}>
+                    <svg className="record-spinner" viewBox="0 0 100 100" aria-hidden="true" data-determinate={workProgress === null ? undefined : "true"}>
+                      <circle cx="50" cy="50" r="45" pathLength="100" style={workProgress === null ? undefined : { strokeDasharray: `${workProgress} 100` }} />
+                    </svg>
+                    <span className="record-glyph" aria-hidden="true" />
+                  </button>
+                  <button className="settings-button" type="button" onClick={() => setIsSettingsOpen(true)} aria-label="Settings" title="Settings">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  </button>
+                </div>
               </div>
+              {hasWorkspace ? <header className="workspace-toolbar">
+                <div className="workspace-tabs" role="tablist" aria-label="Workspace view">
+                  {views.map(item => <button key={item} id={`${item}-tab`} type="button" role="tab"
+                    aria-selected={view === item} aria-controls={`${item}-panel`} tabIndex={view === item ? 0 : -1}
+                    onClick={() => setWorkspaceView(item)} onKeyDown={(event: KeyboardEvent) => {
+                      if (!canShowMap || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                      event.preventDefault();
+                      const next = event.key === "Home" ? "transcript" : event.key === "End" ? "map" : item === "map" ? "transcript" : "map";
+                      setWorkspaceView(next); document.getElementById(`${next}-tab`)?.focus();
+                    }}>{item === "map" ? "Map" : "Transcript"}</button>)}
+                </div>
+                {hasTranscript || recorder.isPaused ? <div className="workspace-tools">
+                  {state.isEditing ? <button type="button" className="done-button" onClick={() => setIsEditing(false)}>Done</button> : null}
+                  {hasTranscript && !isBusyTranscribingMedia && !isSentencePlaybackUnavailable && !state.isEditing ? <>
+                    <button className="speech-button playback-cta" type="button" onClick={playTranscript}
+                      aria-label={!speech.isSpeaking ? "Read the transcript aloud" : speech.isPlaybackPaused ? "Resume reading" : "Pause reading"}
+                      title={!speech.isSpeaking ? "Play transcript" : speech.isPlaybackPaused ? "Resume" : "Pause"}>
+                      {speech.isSpeaking && !speech.isPlaybackPaused ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="3" width="5" height="18" rx="1" /><rect x="14" y="3" width="5" height="18" rx="1" /></svg> : <Play size={20} />}
+                    </button>
+                    {speech.isSpeaking ? <button className="speech-button" type="button" onClick={stopTranscript} aria-label="Stop reading the transcript aloud" title="Stop"><Square size={20} /></button> : null}
+                  </> : null}
+                  {hasTranscript ? <div className="transcript-search">
+                    <Search size={18} />
+                    <input ref={searchInputRef} type="search" aria-label="Search transcript" placeholder="Search" onInput={(event: Event) => { searchRef.index = -1; applySearch((event.target as HTMLInputElement).value); goToMatch(); }}
+                      onKeyDown={(event: KeyboardEvent) => { if (event.key === "Enter") { event.preventDefault(); goToMatch(event.shiftKey ? -1 : 1); } }} />
+                    <span ref={searchCountRef} className="transcript-search-count" aria-live="polite">{searchRef.query.trim() ? `${searchRef.index + 1}/${searchRef.matches.length}` : ""}</span>
+                    <button ref={searchGoRef} type="button" aria-label="Go to sentence" title="Go to sentence" hidden={!searchRef.matches.length} onClick={focusCurrentMatch}><CornerDownRight size={18} /></button>
+                  </div> : null}
+                  <details className="transcript-download-menu">
+                    <summary aria-label="More options" title="More"><Ellipsis size={22} /></summary>
+                    <div className="more-panel">
+                      {/* Hidden rather than removed: inserting it moves its siblings, and moved items collapsed inside the closed menu. */}
+                      <div className="more-playback" hidden={!hasTranscript || isBusyTranscribingMedia || isSentencePlaybackUnavailable || state.isEditing}>
+                        <label>Voice
+                          <select aria-label="Transcript playback voice" className="playback-select" value={state.transcriptPlaybackChoice} disabled={speech.isSpeaking}
+                    onChange={(event: DomEvent<Event, HTMLSelectElement>) => handleTranscriptPlaybackChoice(event.currentTarget.value as TranscriptPlaybackChoice)}>
+                    {transcriptPlaybackOptions.map((group) => <optgroup key={group.group} label={group.group}>{group.items.map((item) => <option key={item.value} value={item.value} disabled={item.disabled}>{item.label}</option>)}</optgroup>)}
+                  </select>
+                        </label>
+                        <label>Speed
+                          <select aria-label="Playback speed" className="playback-speed" value={String(state.playbackRate)}
+                    onChange={(event: DomEvent<Event, HTMLSelectElement>) => { const rate = Number(event.currentTarget.value); setPlaybackRate(rate); speech.setPlaybackRate(rate); }}>
+                    {PLAYBACK_SPEEDS.map((speed) => <option key={speed} value={String(speed)}>{speed}x</option>)}
+                  </select>
+                        </label>
+                      </div>
+                      {hasTranscript ? <>
+                        <button type="button" onClick={() => void copyTranscript()}>{state.copyLabel}</button>
+                        <button type="button" disabled={capturing || isBusyTranscribingMedia} onClick={() => { closeMoreMenu(); speech.stopSpeaking(); setIsEditing(true); }}>Edit</button>
+                      </> : null}
+                      <button className="new-session-button" type="button" onClick={() => { closeMoreMenu(); startNewSession(); }} disabled={capturing || isBusyTranscribingMedia || isBlocking}
+                        aria-label="New recording" title="Save this and start again">New recording</button>
+                      {hasTranscript ? <>
+                      <div className="transcript-export-buttons">
+                      <button type="button" onClick={() => downloadText(`${playbackText}\n`, "transcript.txt", "text/plain")}>Download text</button>
+                    <button type="button" onClick={() => downloadText(captionsToSrt(buildOriginalCaptions(transcriptSentences)), "transcript.srt", "application/x-subrip")}>Subtitles (SRT)</button>
+                    <button type="button" onClick={() => downloadText(captionsToVtt(buildOriginalCaptions(transcriptSentences)), "transcript.vtt", "text/vtt")}>Subtitles (VTT)</button>
+                    {locatedPhraseMessages.length > 0 ? <>
+                      <button type="button" onClick={() => downloadText(locatedTranscriptToGpx(locatedPhraseMessages, recorder.locationTrack, recorder.recordingStartedAt), "transcript.gpx", "application/gpx+xml")}>Route (GPX)</button>
+                      <button type="button" onClick={() => downloadText(locatedTranscriptToGeoJson(locatedPhraseMessages, recorder.locationTrack, recorder.recordingStartedAt), "transcript.geojson", "application/geo+json")}>Route (GeoJSON)</button>
+                    </> : null}
+                  </div>
+                  <details className="more-media">
+                        <summary>Audio and video</summary>
+                        <TranscriptDownloads showTextDownload={false} text={playbackText} sentences={transcriptSentences} hasSourceAudio={hasSourceAudio}
+                    getSourceMedia={async () => recorder.sourceMedia ?? await recorder.getRecordingSourceMedia()}
+                    busy={capturing || recorder.isChangingCapture || recorder.isPreparing || isBusyTranscribingMedia || isBlocking} />
+                      </details>
+                      </> : null}
+                    </div>
+                  </details>
+                </div> : null}
+              </header> : null}
               {recorder.error ? <p className="error" role="alert">{recorder.error}</p> : null}
               {recorder.opfsError ? <p className="error" role="alert">Saving failed: {recorder.opfsError}</p> : null}
-              {hasWorkspace ? <section ref={transcriptRef} id="transcript-panel" hidden={view === "map"} className="transcript" role="tabpanel" aria-labelledby="transcript-tab" aria-label="Transcript" aria-live="polite">
+              {hasWorkspace ? <section ref={transcriptRef} id="transcript-panel" hidden={view === "map"} className="transcript" role="tabpanel" aria-labelledby="transcript-tab" aria-label="Transcript" aria-live="polite" onKeyDown={returnToSearch}>
                 {transcriptParagraphs.map((paragraph) => <TranscriptParagraph key={paragraph.id} sentences={paragraph.sentences}
                   translations={translation.enabled ? Object.fromEntries(paragraph.sentences.flatMap((sentence) => translation.translations[sentence.id]?.source === sentence.text ? [[sentence.id, translation.translations[sentence.id].text]] : [])) : null}
                   translationKey={translation.enabled ? paragraph.sentences.map((sentence) => translation.translations[sentence.id]?.source === sentence.text ? translation.translations[sentence.id].text : "").join("\n") : ""}
@@ -536,53 +634,8 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
                   isPlaying={speech.isSpeaking} playbackLabel={selectedTranscriptPlaybackOption?.label ?? "Selected voice"} playbackUnavailable={isSentencePlaybackUnavailable}
                   onStop={stopTranscript} /> : <p className="location-unknown" role="status">{getLocationMessage(recorder.locationStatus)}</p>)}
               </section> : null}
-              {hasTranscript && !isBusyTranscribingMedia && !isSentencePlaybackUnavailable && !state.isEditing ? <div className="transcript-controls" aria-label="Transcript controls">
-                <div className="playback-gadget">
-                  <button className="speech-button playback-cta" type="button" onClick={playTranscript}
-                    aria-label={!speech.isSpeaking ? "Read the transcript aloud" : speech.isPlaybackPaused ? "Resume reading" : "Pause reading"}>
-                    {speech.isSpeaking && !speech.isPlaybackPaused ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="3" width="5" height="18" rx="1" /><rect x="14" y="3" width="5" height="18" rx="1" /></svg> : <Play size={20} />}
-                    <span>{!speech.isSpeaking ? "Play transcript" : speech.isPlaybackPaused ? "Resume" : "Pause"}</span>
-                  </button>
-                  {speech.isSpeaking ? <button className="speech-button" type="button" onClick={stopTranscript} aria-label="Stop reading the transcript aloud"><Square size={20} /><span>Stop</span></button> : null}
-                  <select aria-label="Playback speed" className="playback-speed" value={String(state.playbackRate)}
-                    onChange={(event: DomEvent<Event, HTMLSelectElement>) => { const rate = Number(event.currentTarget.value); setPlaybackRate(rate); speech.setPlaybackRate(rate); }}>
-                    {PLAYBACK_SPEEDS.map((speed) => <option key={speed} value={String(speed)}>{speed}x</option>)}
-                  </select>
-                  <select aria-label="Transcript playback voice" className="playback-select" value={state.transcriptPlaybackChoice} disabled={speech.isSpeaking}
-                    onChange={(event: DomEvent<Event, HTMLSelectElement>) => handleTranscriptPlaybackChoice(event.currentTarget.value as TranscriptPlaybackChoice)}>
-                    {transcriptPlaybackOptions.map((group) => <optgroup key={group.group} label={group.group}>{group.items.map((item) => <option key={item.value} value={item.value} disabled={item.disabled}>{item.label}</option>)}</optgroup>)}
-                  </select>
-                </div>
-              </div> : null}
               {state.playbackError ? <p role="alert" className="error">{state.playbackError}</p> : null}
               {!state.playbackError && speech.speechStatus.includes("failed") ? <p role="alert" className="error">{speech.speechStatus}</p> : null}
-              {hasTranscript ? <footer className="transcription-download-footer">
-                <div className="transcript-tools">
-                  <button type="button" onClick={() => downloadText(`${playbackText}\n`, "transcript.txt", "text/plain")}><FileText size={17} />Download text</button>
-                  <button type="button" onClick={() => void copyTranscript()}>{state.copyLabel}</button>
-                  <button type="button" aria-pressed={state.isEditing} disabled={capturing || isBusyTranscribingMedia} onClick={() => { speech.stopSpeaking(); setIsEditing(!state.isEditing); }}>{state.isEditing ? "Done" : "Edit"}</button>
-                  <label className="transcript-search">
-                    <span className="sr-only">Search transcript</span>
-                    <input type="search" aria-label="Search transcript" placeholder="Search" onInput={(event: Event) => { searchRef.index = -1; applySearch((event.target as HTMLInputElement).value); goToNextMatch(); }}
-                      onKeyDown={(event: KeyboardEvent) => { if (event.key === "Enter") { event.preventDefault(); goToNextMatch(); } }} />
-                    <span ref={searchCountRef} className="transcript-search-count" aria-live="polite">{searchRef.query.trim() ? `${searchRef.index + 1}/${searchRef.matches.length}` : ""}</span>
-                  </label>
-                </div>
-                <details className="transcript-download-menu">
-                  <summary>More downloads</summary>
-                  <div className="transcript-export-buttons">
-                    <button type="button" onClick={() => downloadText(captionsToSrt(buildOriginalCaptions(transcriptSentences)), "transcript.srt", "application/x-subrip")}>Subtitles (SRT)</button>
-                    <button type="button" onClick={() => downloadText(captionsToVtt(buildOriginalCaptions(transcriptSentences)), "transcript.vtt", "text/vtt")}>Subtitles (VTT)</button>
-                    {locatedPhraseMessages.length > 0 ? <>
-                      <button type="button" onClick={() => downloadText(locatedTranscriptToGpx(locatedPhraseMessages, recorder.locationTrack, recorder.recordingStartedAt), "transcript.gpx", "application/gpx+xml")}>Route (GPX)</button>
-                      <button type="button" onClick={() => downloadText(locatedTranscriptToGeoJson(locatedPhraseMessages, recorder.locationTrack, recorder.recordingStartedAt), "transcript.geojson", "application/geo+json")}>Route (GeoJSON)</button>
-                    </> : null}
-                  </div>
-                  <TranscriptDownloads showTextDownload={false} text={playbackText} sentences={transcriptSentences} hasSourceAudio={hasSourceAudio}
-                    getSourceMedia={async () => recorder.sourceMedia ?? await recorder.getRecordingSourceMedia()}
-                    busy={capturing || recorder.isChangingCapture || recorder.isPreparing || isBusyTranscribingMedia || isBlocking} />
-                </details>
-              </footer> : null}
               {state.isDraggingFile ? <div className="drop-overlay" aria-hidden="true"><Upload size={32} /><span>Drop to transcribe</span></div> : null}
             </div>}
           </main>
@@ -843,8 +896,14 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
                     hide();
             };
             const onKeyDown = (event: KeyboardEvent) => {
-                if (event.key === "Escape")
-                    hide();
+                if (event.key !== "Escape")
+                    return;
+                hide();
+                closeMoreMenu(true);
+            };
+            const onDocumentPointerDown = (event: PointerEvent) => {
+                if (!(event.target as Element).closest?.(".transcript-download-menu"))
+                    closeMoreMenu();
             };
             // Any manual scroll also stops the playback highlight pulling the view back for a moment.
             const onUserScroll = () => {
@@ -873,6 +932,7 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
             host.addEventListener("keydown", onScrollKey);
             host.addEventListener("transcript-rendered", onTranscriptRendered);
             document.addEventListener("keydown", onKeyDown);
+            document.addEventListener("pointerdown", onDocumentPointerDown);
             return () => {
                 host.removeEventListener("pointerover", onPointerOver);
                 host.removeEventListener("pointerout", onPointerOut);
@@ -887,6 +947,7 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
                 host.removeEventListener("keydown", onScrollKey);
                 host.removeEventListener("transcript-rendered", onTranscriptRendered);
                 document.removeEventListener("keydown", onKeyDown);
+                document.removeEventListener("pointerdown", onDocumentPointerDown);
                 tooltip.remove();
             };
         });

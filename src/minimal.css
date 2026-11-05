@@ -10,72 +10,127 @@
   position: relative;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 16px;
+  gap: 12px;
   height: calc(100dvh - var(--app-gutter) * 2);
   min-height: 320px;
-  max-width: 900px;
+  max-width: 720px;
   margin: 0 auto;
   padding: 0;
 }
-.record-control { display: flex; flex-direction: column; align-items: center; gap: 12px; flex-shrink: 0; margin: clamp(48px, 8vh, 80px) 0 16px; }
+/* One dock, always in the same place: upload, record, settings. */
+.record-control { order: 1; display: flex; flex-direction: column; align-items: center; gap: 12px; flex-shrink: 0; padding-bottom: calc(14px + env(safe-area-inset-bottom)); --input-level: 0; }
+.compact-app[data-workspace="false"] .record-control { margin-block: auto; }
+.record-dock { display: flex; align-items: center; justify-content: center; gap: 24px; margin-top: 6px; }
+/* The record button holds every state: a dot that splits into pause bars, a halo that follows the voice, and a spinner around the rim. */
 :root:root .compact-app .record-button {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: max(112px, 7em);
-  height: auto;
-  aspect-ratio: 1;
-  min-width: 96px;
-  min-height: 96px;
-  padding: 12px;
-  font-size: max(1rem, 1em);
+  position: relative;
+  isolation: isolate;
+  flex: none;
+  width: 76px;
+  height: 76px;
+  min-width: 76px;
+  min-height: 76px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
-  flex-shrink: 0;
+  --ds-button-bg: var(--ds-primary-rest);
+  --ds-button-ink: var(--ds-primary-ink);
+  overflow: visible;
 }
-.compact-app .record-button > svg { width: 24px; height: 24px; }
-.workspace-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
-.workspace-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.compact-app .workspace-tabs { padding: 0; border: 0; background: transparent; flex-shrink: 0; flex-wrap: wrap; max-width: 100%; min-width: 0; }
-:root:root .compact-app .upload-button { width: auto; min-height: 44px; padding: 8px 12px; gap: 6px; }
-.compact-app .settings-button { position: static; width: 44px; height: 44px; padding: 8px; }
-.compact-app[data-workspace="true"] .record-control { margin: 0; }
-:root:root .compact-app[data-workspace="true"] .record-button { width: max(84px, 5.25em); min-width: 84px; min-height: 84px; padding: 6px; gap: 2px; }
-.compact-app .record-button > span { white-space: nowrap; }
-.compact-app .transcript { flex: 1 1 auto; min-height: 0; max-height: none; background: transparent; border: 0; box-shadow: none; border-radius: 0; padding: 8px; overflow-y: auto; font-size: 1.125em; line-height: 1.8; }
+.record-button::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--ds-primary-rest);
+  opacity: 0;
+  transition: transform 90ms linear, opacity 200ms ease;
+}
+.record-button[data-state="recording"]::before { opacity: 0.25; transform: scale(calc(1.06 + var(--input-level, 0) * 0.2)); }
+.record-button::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--ds-primary-rest);
+  opacity: 0;
+  pointer-events: none;
+}
+.record-button[data-state="recording"]::after { animation: record-pulse 2.4s ease-out infinite; }
+@keyframes record-pulse { from { opacity: 0.6; transform: scale(1); } to { opacity: 0; transform: scale(1.3); } }
+.record-glyph { position: relative; display: block; width: 28px; height: 28px; }
+.record-glyph::before,
+.record-glyph::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  width: 14px;
+  background: currentColor;
+  transition: width 200ms ease, border-radius 200ms ease, transform 200ms ease;
+}
+.record-glyph::before { left: 0; border-radius: 14px 0 0 14px; }
+.record-glyph::after { right: 0; border-radius: 0 14px 14px 0; }
+.record-button[data-state="recording"] .record-glyph::before { width: 9px; border-radius: 2px; transform: translateX(1px); }
+.record-button[data-state="recording"] .record-glyph::after { width: 9px; border-radius: 2px; transform: translateX(-1px); }
+.record-button[data-working] .record-glyph { transform: scale(0.72); }
+.record-spinner { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 200ms ease; }
+.record-spinner circle { r: 41px; fill: none; stroke: currentColor; stroke-width: 5; stroke-linecap: round; stroke-dasharray: 26 74; transition: stroke-dasharray 200ms ease; }
+.record-button[data-working] .record-spinner { opacity: 1; animation: record-spin 1s linear infinite; }
+.record-button[data-working] .record-spinner[data-determinate] { transform: rotate(-90deg); animation: none; }
+@keyframes record-spin { to { transform: rotate(360deg); } }
+/* A disabled record button is still the record button, because it is busy rather than absent. */
+:root:root .app-shell .record-button[data-working]:disabled { --ds-button-bg: var(--ds-primary-rest); --ds-button-ink: var(--ds-primary-ink); border: 0; cursor: progress; }
+.workspace-toolbar { order: -1; position: relative; justify-content: flex-end; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; flex-shrink: 0; }
+.compact-app .workspace-tabs { margin-inline-end: auto; padding: 0; border: 0; background: transparent; flex-shrink: 0; flex-wrap: nowrap; min-width: 0; gap: 4px; }
+.workspace-tools { display: flex; flex: 1 1 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 4px; min-width: 0; }
+/* Secondary controls have no outline of their own: their icon or text is the mark, and hover and focus show the target. */
+:root:root .app-shell :is(.workspace-tabs, .workspace-tools, .record-dock, .more-panel) button:not(.record-button) { --ds-button-bg: transparent; border-color: transparent; width: auto; font-weight: 500; }
+:root:root .app-shell :is(.workspace-tabs, .workspace-tools, .record-dock) button:not(.record-button) { padding: 8px 10px; }
+:root:root .app-shell :is(.workspace-tabs, .workspace-tools, .record-dock, .more-panel) button:not(.record-button):hover:not(:disabled) { --ds-button-bg: var(--ds-selected); }
+:root:root .app-shell .workspace-tabs button[aria-selected="true"] { --ds-button-bg: transparent; font-weight: 700; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; }
+:root:root .app-shell :is(.workspace-tools, .record-dock, .more-panel) button:disabled { border-color: transparent; }
+:root:root .app-shell .record-dock .settings-button { position: static; width: 44px; height: 44px; padding: 8px; }
+.compact-app .transcript { flex: 1 1 auto; min-height: 0; max-height: none; background: transparent; border: 0; box-shadow: none; border-radius: 0; padding: 8px; overflow-y: auto; font-size: 1.25em; line-height: 1.7; }
 .compact-app .transcript[hidden] { display: none; }
 .compact-app .transcript-paragraph { white-space: pre-wrap; }
 /* Off-screen runs skip rendering but stay focusable. The padding leaves room for focus rings and highlights. */
 .transcript-run { display: block; margin-inline: -8px; padding: 8px; content-visibility: auto; contain-intrinsic-size: auto 6em; }
-.compact-app .transcript-controls { flex-shrink: 0; padding: 0; }
 .compact-app .transcript-map { flex: 1 1 auto; min-height: 300px; overflow: auto; }
 .compact-app .transcript-map[hidden] { display: none; }
-.compact-app .playback-gadget { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: transparent; border: 0; }
-.compact-app .playback-select { width: auto; flex: 1; min-width: 0; }
-.compact-app .speech-button.playback-cta { min-height: 44px; }
 .compact-app .error { max-width: 40rem; }
 .record-status { max-width: 42ch; color: var(--ds-muted); font-size: 0.875em; text-align: center; }
-.transcription-download-footer { margin-top: auto; flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
-.transcript-download-menu { padding: 8px 0; border-top: 1px solid var(--studio-line); }
-.transcript-download-menu > summary { cursor: pointer; min-height: 44px; align-content: center; }
-.transcript-download-menu .transcript-downloads { margin: 8px 0 0; padding: 0; border: 0; background: transparent; }
-.transcript-download-menu .download-heading { margin: 0; }
-.live-capture { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; width: 100%; color: var(--ds-text); --input-level: 0; }
+.transcript-download-menu { position: relative; flex: none; }
+.transcript-download-menu > summary { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; cursor: pointer; list-style: none; }
+.transcript-download-menu > summary::-webkit-details-marker { display: none; }
+.transcript-download-menu > summary:hover, .transcript-download-menu[open] > summary { background: var(--ds-selected); }
+.more-panel { position: absolute; inset-block-start: calc(100% + 4px); inset-inline-end: 0; z-index: 10; display: grid; gap: 2px; box-sizing: border-box; width: min(320px, calc(100vw - 2 * var(--app-gutter))); max-height: min(70dvh, 560px); padding: 8px; overflow-y: auto; border: 1px solid var(--studio-line); border-radius: 12px; background: var(--ds-surface); box-shadow: 0 12px 32px color-mix(in srgb, var(--ds-text) 18%, transparent); }
+:root:root .app-shell .more-panel button { width: 100%; justify-content: flex-start; text-align: start; }
+.more-playback { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 4px 4px 12px; margin-bottom: 4px; border-bottom: 1px solid var(--studio-line); }
+.more-playback[hidden] { display: none; }
+.more-playback label { display: grid; gap: 4px; min-width: 0; font-size: 0.875em; color: var(--ds-muted); }
+.more-playback select { width: 100%; min-width: 0; }
+.transcript-export-buttons { display: grid; gap: 2px; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--studio-line); }
+.more-panel .transcript-downloads { margin: 0; padding: 0; border: 0; background: transparent; }
+.more-panel .download-heading { margin: 0; }
+.more-media { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--studio-line); }
+.more-media > summary { display: flex; align-items: center; min-height: 44px; padding-inline: 10px; font-weight: 500; cursor: pointer; }
+.live-capture { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px; width: 100%; color: var(--ds-text); }
 .live-capture > :not(canvas) { flex: none; white-space: nowrap; }
-.live-capture-indicator { display: block; width: 12px; height: 12px; border-radius: 50%; background: var(--ds-primary-rest); box-shadow: 0 0 0 calc(var(--input-level) * 8px) color-mix(in srgb, var(--ds-primary-rest) 35%, transparent); }
-.live-capture[data-state="paused"] .live-capture-indicator { background: var(--ds-muted); box-shadow: none; }
-.live-capture[data-state="starting"] .live-capture-indicator { animation: live-capture-pulse 1s ease-in-out infinite alternate; }
-.live-capture-label { font-size: 0.875em; font-weight: 600; }
+.live-capture-label { font-size: 0.875em; color: var(--ds-muted); }
 .live-capture-timer { font-variant-numeric: tabular-nums; font-weight: 700; }
-.live-capture-waveform { display: block; flex: 1 1 160px; width: 160px; height: 44px; min-width: 0; color: var(--ds-primary-rest); }
-@keyframes live-capture-pulse { from { opacity: 0.35; } to { opacity: 1; } }
+.live-capture-waveform { display: block; flex: 0 1 200px; width: 200px; height: 32px; min-width: 0; color: var(--ds-primary-rest); }
 .media-progress { display: flex; align-items: center; gap: 12px; width: min(100%, 420px); }
 .media-progress progress { flex: 1; min-width: 0; }
-.transcript-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.transcript-search { display: flex; align-items: center; gap: 8px; flex: 1 1 160px; min-width: 0; }
-.transcript-search input { flex: 1; min-width: 0; min-height: 44px; }
-.transcript-search-count { font-variant-numeric: tabular-nums; color: var(--ds-muted); }
-.transcript-export-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.compact-app .playback-speed { width: auto; flex: 0 0 auto; }
+.transcript-search { display: flex; align-items: center; gap: 6px; flex: 0 1 200px; min-width: 88px; padding-inline: 8px; border-radius: 8px; color: var(--ds-muted); }
+.transcript-search:focus-within { background: var(--ds-selected); }
+.transcript-search:has(input:focus-visible) { outline: var(--focus-width) solid var(--ds-focus); outline-offset: 2px; }
+:root:root .app-shell .transcript-search input:focus-visible { outline: 0; }
+:root:root .app-shell .transcript-search input { flex: 1; width: 100%; min-width: 0; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--ds-text); font-size: max(1rem, 1em); }
+.transcript-search-count { flex: none; font-variant-numeric: tabular-nums; }
+:root:root .app-shell .transcript-search button { flex: none; padding: 8px; }
+:root:root .app-shell .transcript-search button[hidden] { display: none; }
 .sentence-editor { display: block; width: 100%; margin: 4px 0; font: inherit; }
 :root:root .app-shell .sentence-button.search-match { box-shadow: inset 0 -3px 0 var(--ds-primary-rest); }
 :root:root .app-shell .sentence-button.search-current { box-shadow: inset 0 0 0 3px var(--ds-primary-rest); }
@@ -104,8 +159,17 @@
 .phrase-map-timeline { display: flex; align-items: center; gap: 12px; padding: 8px 12px; font-variant-numeric: tabular-nums; }
 .phrase-map-timeline input { flex: 1; min-width: 0; min-height: 44px; }
 .map-privacy-note { margin: 0; padding: 6px 12px; color: var(--ds-muted); font-size: 0.875em; }
-@media (prefers-reduced-motion: reduce) { .live-capture[data-state="starting"] .live-capture-indicator { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .record-button::before, .record-spinner, .record-glyph::before, .record-glyph::after { transition: none; }
+  .record-button[data-state="recording"]::after, .record-button[data-working] .record-spinner { animation: none; }
+}
 @media (max-width: 720px) {
-  .compact-app .app-layout { gap: 12px; }
-  .record-control { margin-top: 56px; }
+  .compact-app .app-layout { gap: 8px; }
+  /* One row of equals, until a search in use takes its own row for the count and go button. */
+  .workspace-tools { display: contents; }
+  .workspace-tabs { flex: none; }
+  .transcript-search { flex: 1 1 56px; min-width: 56px; padding-inline: 4px; }
+  .transcript-search:not(:has(input:focus)) input::placeholder { color: transparent; }
+  .transcript-search:has(input:focus, input:not(:placeholder-shown)) { order: 1; flex: 1 1 100%; padding-inline: 8px; }
+  :root:root .compact-app .record-dock button:not(.record-button), :root:root .compact-app .workspace-tabs button { width: auto; }
 }

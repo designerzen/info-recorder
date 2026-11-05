@@ -498,7 +498,7 @@ export function createTranscriber(...initialInputs: [
         if (now - lastActivityUpdateRef.current > 80) {
             lastActivityUpdateRef.current = now;
             // Written straight to the DOM: this changes too often to re-render the app for.
-            waveformCanvasRef.current?.parentElement?.style.setProperty("--input-level", Math.min(1, activityRms * 8).toFixed(2));
+            waveformCanvasRef.current?.closest<HTMLElement>(".record-control")?.style.setProperty("--input-level", Math.min(1, activityRms * 8).toFixed(2));
         }
         const samples = createFloat32Buffer(buffer.length);
         samples.set(buffer);

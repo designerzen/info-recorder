@@ -16,6 +16,18 @@ export const Circle = ({ size = 24, ...props }: IconProps) => h("svg", { xmlns: 
     string,
     Record<string, string>
 ]>).map(([tag, attrs]) => h(tag, attrs)));
+export const CornerDownRight = ({ size = 24, ...props }: IconProps) => h("svg", { xmlns: "http://www.w3.org/2000/svg", width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", ...props }, ...([["path", { "d": "m15 10 5 5-5 5" }], ["path", { "d": "M4 4v7a4 4 0 0 0 4 4h12" }]] as Array<[
+    string,
+    Record<string, string>
+]>).map(([tag, attrs]) => h(tag, attrs)));
+export const Ellipsis = ({ size = 24, ...props }: IconProps) => h("svg", { xmlns: "http://www.w3.org/2000/svg", width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", ...props }, ...([["circle", { "cx": "12", "cy": "12", "r": "1" }], ["circle", { "cx": "19", "cy": "12", "r": "1" }], ["circle", { "cx": "5", "cy": "12", "r": "1" }]] as Array<[
+    string,
+    Record<string, string>
+]>).map(([tag, attrs]) => h(tag, attrs)));
+export const Search = ({ size = 24, ...props }: IconProps) => h("svg", { xmlns: "http://www.w3.org/2000/svg", width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", ...props }, ...([["path", { "d": "m21 21-4.34-4.34" }], ["circle", { "cx": "11", "cy": "11", "r": "8" }]] as Array<[
+    string,
+    Record<string, string>
+]>).map(([tag, attrs]) => h(tag, attrs)));
 export const FileAudio = ({ size = 24, ...props }: IconProps) => h("svg", { xmlns: "http://www.w3.org/2000/svg", width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", ...props }, ...([["path", { "d": "M4 6.835V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-.343", "key": "1vfytu" }], ["path", { "d": "M14 2v5a1 1 0 0 0 1 1h5", "key": "wfsgrz" }], ["path", { "d": "M2 19a2 2 0 0 1 4 0v1a2 2 0 0 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 0 1-4 0v-1a2 2 0 0 1 4 0", "key": "1etmh7" }]] as Array<[
     string,
     Record<string, string>

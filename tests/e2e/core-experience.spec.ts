@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { assertButton } from "./helpers/buttonContract";
 
 // Capture, storage, audio and the DOM are real; only speech recognition is stubbed.
 // These use real audio graphs and very long transcripts, so run them one at a time.
@@ -104,7 +105,7 @@ test("recording shows activity, a waveform and a running clock, with no Stop but
   const timer = page.getByRole("timer", { name: "Recording duration" });
   const first = await timer.textContent();
   await expect.poll(() => timer.textContent()).not.toBe(first);
-  await expect(page.locator(".live-capture")).toHaveAttribute("style", /--input-level: [0-9.]+/);
+  await expect(page.locator(".record-control")).toHaveAttribute("style", /--input-level: [0-9.]+/);
   await expect(page.getByRole("button", { name: /^stop/i })).toHaveCount(0);
   await expect(page.locator(".sentence-button").first()).toBeVisible({ timeout: 15000 });
 });
@@ -117,9 +118,6 @@ test("pausing releases the microphone, freezes the clock and lets a file be adde
   await page.getByRole("button", { name: "Pause recording", exact: true }).click();
   const resume = page.getByRole("button", { name: "Resume recording", exact: true });
   await expect(resume).toBeEnabled({ timeout: 8000 });
-  await expect(resume).toHaveText("Resume");
-  const label = resume.locator("span");
-  expect((await label.boundingBox())!.height).toBeLessThan(40);
   await expect(page.locator(".live-capture-label")).toHaveText("Paused");
   expect(await page.evaluate(() => (window as any).streams[0].getAudioTracks()[0].readyState)).toBe("ended");
   const clock = await page.getByRole("timer").textContent();
@@ -281,7 +279,6 @@ test("sentences flow like subtitles and every one can be reached and played by k
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
-  await page.keyboard.press("Tab");
   await expect(sentences.nth(0)).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(sentences.nth(1)).toBeFocused();
@@ -292,6 +289,134 @@ test("sentences flow like subtitles and every one can be reached and played by k
   await expect(sentences.nth(1)).toHaveClass(/active/, { timeout: 5000 });
   await page.keyboard.press(" ");
   await expect(sentences.nth(1)).not.toHaveClass(/active/);
+});
+
+test("the keyboard can reach search first, jump to a search match, play it and come back", async ({ page }) => {
+  await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({ contentType: "application/javascript", body: timedFixture(400, 100, true) }));
+  await page.goto("/");
+  const sentences = page.locator(".sentence-button");
+  await expect(sentences).toHaveCount(400);
+  const search = page.getByRole("searchbox", { name: "Search transcript" });
+  const go = page.getByRole("button", { name: "Go to sentence", exact: true });
+  const count = page.locator(".transcript-search-count");
+  await expect(go).toBeHidden();
+
+  // Search comes before all 400 sentences in Tab order.
+  await page.getByRole("tab", { name: "Transcript", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(search).toBeFocused();
+
+  // Typing never takes focus away from the search box.
+  await page.keyboard.type("end350");
+  await expect(search).toBeFocused();
+  await expect(count).toHaveText("1/1");
+  await search.fill("end39");
+  await expect(count).toHaveText("1/11");
+  await expect(sentences.nth(39)).toHaveClass(/search-current/);
+
+  await page.keyboard.press("Enter");
+  await expect(count).toHaveText("2/11");
+  await expect(sentences.nth(390)).toHaveClass(/search-current/);
+  await page.keyboard.press("Shift+Enter");
+  await expect(count).toHaveText("1/11");
+  await page.keyboard.press("Shift+Enter");
+  await expect(count).toHaveText("11/11");
+  await expect(sentences.nth(399)).toHaveClass(/search-current/);
+  await page.keyboard.press("Shift+Enter");
+  await expect(count).toHaveText("10/11");
+  await expect(sentences.nth(398)).toHaveClass(/search-current/);
+
+  // Tab reaches the button, which lands on the sentence with its details and ring.
+  await page.keyboard.press("Tab");
+  await expect(go).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(sentences.nth(398)).toBeFocused();
+  await expect(sentences.nth(398)).toBeInViewport();
+  await expect(page.getByRole("tooltip")).toBeVisible();
+  expect(await sentences.nth(398).evaluate((element) => getComputedStyle(element).outlineStyle)).toBe("solid");
+
+  // From there, Tab carries on from the match and Enter plays it.
+  await page.keyboard.press("Tab");
+  await expect(sentences.nth(399)).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(sentences.nth(398)).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(sentences.nth(398)).toHaveClass(/active/, { timeout: 5000 });
+  await page.keyboard.press(" ");
+
+  await page.keyboard.press("Escape");
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue("end39");
+  await expect(count).toHaveText("10/11");
+
+  // Clearing the search removes the extra control again.
+  await search.fill("");
+  await expect(go).toBeHidden();
+  await expect(count).toHaveText("");
+  await sentences.nth(5).focus();
+  await page.keyboard.press("Escape");
+  await expect(sentences.nth(5)).toBeFocused();
+});
+
+test("going to a match from the map opens the transcript and focuses the sentence", async ({ page }) => {
+  await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({ contentType: "application/javascript", body: timedFixture(30, 100, true) }));
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Map", exact: true }).click();
+  await expect(page.locator("#transcript-panel")).toBeHidden();
+  await page.getByRole("searchbox", { name: "Search transcript" }).fill("end20");
+  await page.getByRole("button", { name: "Go to sentence", exact: true }).click();
+  await expect(page.locator("#transcript-panel")).toBeVisible();
+  const match = page.locator(".sentence-button").nth(20);
+  await expect(match).toBeFocused();
+  await expect(match).toBeInViewport();
+});
+
+test("at phone width the tools leave room to read the transcript", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({ contentType: "application/javascript", body: timedFixture(60, 100, true) }));
+  await page.goto("/");
+  await page.getByRole("searchbox", { name: "Search transcript" }).fill("end5");
+  await expect(page.getByRole("button", { name: "Go to sentence", exact: true })).toBeVisible();
+  expect((await page.locator("#transcript-panel").boundingBox())!.height).toBeGreaterThan(500);
+  await expect(page.locator(".record-dock button:visible")).toHaveCount(3);
+  await expect(page.locator(".workspace-toolbar button:visible, .workspace-toolbar summary:visible")).toHaveCount(5);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("the record button holds a spinner while it is busy, and the menu closes on Escape and outside clicks", async ({ page }) => {
+  await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({ contentType: "application/javascript", body: timedFixture(3, 100, true).replace("isPreparing:false", "isPreparing:true") }));
+  await page.goto("/");
+  const record = page.locator(".record-button");
+  await expect(record).toHaveAttribute("data-working", "true");
+  await expect(record).toHaveAttribute("aria-busy", "true");
+  await expect(record.locator(".record-spinner")).toHaveCSS("opacity", "1");
+  await expect(record.locator(".record-spinner")).not.toHaveCSS("animation-name", "none");
+  // The spinner sits inside the button, and the button stays filled while it is busy.
+  expect(await record.evaluate((button) => button.contains(button.querySelector(".record-spinner")) && getComputedStyle(button.querySelector(".record-spinner")!).position)).toBe("absolute");
+  expect(await record.locator(".record-spinner").evaluate((spinner) => spinner.clientWidth)).toBeLessThanOrEqual(await record.evaluate((button) => button.clientWidth));
+
+  const menu = page.locator(".transcript-download-menu");
+  const summary = menu.locator("> summary");
+  await summary.click();
+  await expect(page.getByLabel("Transcript playback voice")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("Transcript playback voice")).toBeHidden();
+  await expect(summary).toBeFocused();
+  await summary.click();
+  await page.locator(".sentence-button").first().click();
+  await expect(page.getByLabel("Transcript playback voice")).toBeHidden();
+});
+
+test("a search with no match offers nothing to go to", async ({ page }) => {
+  await page.route("**/src/recorder/createTranscriber.ts*", (route) => route.fulfill({ contentType: "application/javascript", body: timedFixture(3, 100, true) }));
+  await page.goto("/");
+  const search = page.getByRole("searchbox", { name: "Search transcript" });
+  await search.fill("absent");
+  await expect(page.locator(".transcript-search-count")).toHaveText("0/0");
+  await expect(page.getByRole("button", { name: "Go to sentence", exact: true })).toBeHidden();
+  await page.keyboard.press("Enter");
+  await expect(search).toBeFocused();
 });
 
 test("a long sentence wraps across lines and stays focusable when playback is unavailable", async ({ page }) => {
@@ -403,6 +528,7 @@ test("a reload restores the session with its audio, and New starts clean without
   await expect(sentence).toHaveClass(/active/, { timeout: 5000 });
   await sentence.click();
 
+  await page.locator(".transcript-download-menu > summary").click();
   await page.getByRole("button", { name: "New recording", exact: true }).click();
   await expect(page.locator(".sentence-button")).toHaveCount(0);
   await expect(page.locator("button:visible")).toHaveCount(3);
@@ -430,6 +556,7 @@ test("sentences can be corrected, searched, copied and exported as subtitles", a
   await page.getByRole("button", { name: "Pause recording", exact: true }).click();
   await expect(page.getByRole("button", { name: "Resume recording", exact: true })).toBeEnabled({ timeout: 8000 });
 
+  await page.locator(".transcript-download-menu > summary").click();
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   const editor = page.locator(".sentence-editor").first();
   await editor.fill("Corrected words.");
@@ -442,11 +569,11 @@ test("sentences can be corrected, searched, copied and exported as subtitles", a
   await expect(first).toHaveClass(/search-current/);
   await expect(page.locator(".transcript-search-count")).toHaveText("1/1");
 
+  await page.locator(".transcript-download-menu > summary").click();
   await page.getByRole("button", { name: "Copy", exact: true }).click();
   await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("Corrected words.");
 
-  await page.locator(".transcript-download-menu > summary").click();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Subtitles (VTT)", exact: true }).click();
   expect((await download).suggestedFilename()).toBe("transcript.vtt");

@@ -54,6 +54,7 @@ export async function readButton(button: Locator) {
     return {
       name: element.getAttribute("aria-label") || element.textContent?.trim() || element.getAttribute("title"),
       isRunningText: element.matches(".sentence-button"),
+      isQuiet: element.matches(":is(.workspace-tabs, .workspace-tools, .record-dock, .more-panel) button:not(.record-button)"),
       width: rect.width, height: rect.height, labels,
       iconContrast: ratio(blend(rgba(style.color), bg), bg),
       background: style.backgroundColor, backgroundImage: style.backgroundImage,
@@ -77,7 +78,8 @@ export async function assertButton(button: Locator, state: string) {
   if (!paint.isRunningText) {
     expect(paint.width, context).toBeGreaterThanOrEqual(43.99);
     expect(paint.height, context).toBeGreaterThanOrEqual(43.99);
-    expect(paint.boundaryContrast, context).toBeGreaterThanOrEqual(3);
+    // Secondary controls are marked by their icon or text, which the checks below still hold to 7:1.
+    if (!paint.isQuiet) expect(paint.boundaryContrast, context).toBeGreaterThanOrEqual(3);
   }
   expect(paint.opacity, context).toBe("1");
   expect(paint.filter, context).toBe("none");

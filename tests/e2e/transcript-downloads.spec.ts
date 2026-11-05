@@ -40,6 +40,7 @@ test("a paused recording exposes its available audio downloads", async ({ page }
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Resume recording", exact: true })).toBeVisible();
   await page.locator(".transcript-download-menu > summary").click();
+  await page.locator(".more-media > summary").click();
   await expect(page.getByRole("button", { name: "Download audio", exact: true })).toBeEnabled();
 });
 
@@ -49,6 +50,7 @@ for (const width of [1365, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.goto("/");
     await page.locator(".transcript-download-menu > summary").click();
+  await page.locator(".more-media > summary").click();
     const panel = page.getByRole("region", { name: "Transcript downloads" });
     await expect(panel).toBeVisible();
     const downloading = page.waitForEvent("download");

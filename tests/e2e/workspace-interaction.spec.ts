@@ -20,7 +20,9 @@ for (const width of [1280, 390]) {
     await page.evaluate(() => dispatchEvent(new Event("fixture:transcript")));
     const panel = page.getByRole("tabpanel", { name: "Transcript", exact: true });
     await expect(panel.getByRole("button", { name: "A thought worth keeping." })).toBeEnabled();
+    await page.locator(".transcript-download-menu > summary").click();
     await expect(page.getByRole("button", { name: "Download text", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
     await map.click();
     await transcript.click();
     await expect(panel).toContainText("A thought worth keeping.");

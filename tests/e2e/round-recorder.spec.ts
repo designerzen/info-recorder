@@ -19,12 +19,14 @@ for (const width of [1280, 390]) {
     await page.screenshot({ path: test.info().outputPath("start.png") });
     await record.click();
     const pause = page.getByRole("button", { name: "Pause recording", exact: true });
-    await expect(pause).toHaveText("Pause");
     await page.evaluate(() => dispatchEvent(new Event("fixture:transcript")));
     const transcript = page.getByRole("tabpanel", { name: "Transcript", exact: true });
     await expect(transcript).toHaveText("A thought worth keeping.");
+    // The transcript fills the page, and the dock stays under it.
     const control = (await pause.boundingBox())!;
-    expect((await transcript.boundingBox())!.y).toBeGreaterThan(control.y + control.height);
+    const text = (await transcript.boundingBox())!;
+    expect(control.y).toBeGreaterThanOrEqual(text.y + text.height);
+    expect(text.height).toBeGreaterThan(450);
     await expect(transcript.locator(".sentence-button")).toHaveCount(1);
     await pause.click();
     await page.getByRole("button", { name: "Resume recording", exact: true }).click();
@@ -41,8 +43,7 @@ for (const width of [1280, 390]) {
     for (const selector of [".phrase-map", ".activity-progress-panel"]) {
       await expect(page.locator(selector)).toHaveCount(0);
     }
-    const footer = (await page.locator(".transcription-download-footer").boundingBox())!;
-    expect(footer.y + footer.height).toBeGreaterThanOrEqual(860);
+    expect(control.y + control.height).toBeGreaterThanOrEqual(840);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath("transcript.png") });
   });
