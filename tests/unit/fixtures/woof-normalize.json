@@ -1,0 +1,145 @@
+[
+ {
+  "text": "Please call me back at 415-555-0199 before 5:30 p.m. on Friday.",
+  "spoken": "Please call me back at four one five, five five five, zero one nine nine before five thirty PM on Friday.",
+  "pieces": [
+   "Please call me back at four one five, five five five, zero one nine nine before five thirty PM on Friday."
+  ]
+ },
+ {
+  "text": "Your order ships on March 3rd, and the tracking code is QX-4471.",
+  "spoken": "Your order ships on March third, and the tracking code is Q X four four seven one.",
+  "pieces": [
+   "Your order ships on March third, and the tracking code is Q X four four seven one."
+  ]
+ },
+ {
+  "text": "The committee, which had met every Tuesday since the spring of 2019, finally agreed that the budget would need a second review before anyone could sign it, and that the review should be public.",
+  "spoken": "The committee, which had met every Tuesday since the spring of twenty nineteen, finally agreed that the budget would need a second review before anyone could sign it, and that the review should be public.",
+  "pieces": [
+   "The committee, which had met every Tuesday since the spring of twenty nineteen,",
+   "finally agreed that the budget would need a second review before anyone could sign it,",
+   "and that the review should be public."
+  ]
+ },
+ {
+  "text": "Henry VIII had six wives; Chapter XIV explains why.",
+  "spoken": "Henry the eighth had six wives; Chapter fourteen explains why.",
+  "pieces": [
+   "Henry the eighth had six wives; Chapter fourteen explains why."
+  ]
+ },
+ {
+  "text": "It costs $4.2 million, or about €12.99 per user, up 15% from 2023.",
+  "spoken": "It costs four point two million dollars, or about twelve euros and ninety nine cents per user, up fifteen percent from twenty twenty three.",
+  "pieces": [
+   "It costs four point two million dollars, or about twelve euros and ninety nine cents per user,",
+   "up fifteen percent from twenty twenty three."
+  ]
+ },
+ {
+  "text": "Meet me in Room 402 at 10am on 14/03, gate 47B.",
+  "spoken": "Meet me in Room four oh two at ten AM on the fourteenth of March, gate forty seven B.",
+  "pieces": [
+   "Meet me in Room four oh two at ten AM on the fourteenth of March, gate forty seven B."
+  ]
+ },
+ {
+  "text": "Dr. Smith lives at 742 Evergreen Terrace, Springfield.",
+  "spoken": "Doctor Smith lives at seven forty two Evergreen Terrace, Springfield.",
+  "pieces": [
+   "Doctor Smith lives at seven forty two Evergreen Terrace, Springfield."
+  ]
+ },
+ {
+  "text": "Email jane.doe@example.com or visit https://www.example.org/docs.",
+  "spoken": "Email jane dot doe at example dot com or visit w w w dot example dot org slash docs.",
+  "pieces": [
+   "Email jane dot doe at example dot com or visit w w w dot example dot org slash docs."
+  ]
+ },
+ {
+  "text": "The 1990s were great; '98 especially.",
+  "spoken": "The nineteen nineties were great; ninety eight especially.",
+  "pieces": [
+   "The nineteen nineties were great; ninety eight especially."
+  ]
+ },
+ {
+  "text": "Mix 1 1/2 cups of flour with 3/4 cup of sugar for 45 minutes at 180°C.",
+  "spoken": "Mix one and a half cups of flour with three quarters cup of sugar for forty five minutes at one hundred and eighty degrees Celsius.",
+  "pieces": [
+   "Mix one and a half cups of flour with three quarters cup of sugar for forty five minutes at one hundred and eighty degrees Celsius."
+  ]
+ },
+ {
+  "text": "Saoirse Ronan ordered gnocchi in Worcestershire-glazed sauce with Siobhan.",
+  "spoken": "Saoirse Ronan ordered gnocchi in Worcestershire-glazed sauce with Siobhan.",
+  "pieces": [
+   "Saoirse Ronan ordered gnocchi in Worcestershire-glazed sauce with Siobhan."
+  ]
+ },
+ {
+  "text": "Run getUserName() in C# and C++ v2.3.1 on localhost:8080.",
+  "spoken": "Run get User Name in C sharp and C plus plus version two point three point one on localhost colon eighty eighty.",
+  "pieces": [
+   "Run get User Name in C sharp and C plus plus version two point three point one on localhost colon eighty eighty."
+  ]
+ },
+ {
+  "text": "We walked 5 km in 1h30 at 6 mph, about 10 mg/kg.",
+  "spoken": "We walked five kilometers in one hour thirty minutes at six miles per hour, about ten milligrams per kilogram.",
+  "pieces": [
+   "We walked five kilometers in one hour thirty minutes at six miles per hour, about ten milligrams per kilogram."
+  ]
+ },
+ {
+  "text": "The score was 3:2 and the ratio of 16:9 looked fine.",
+  "spoken": "The score was three to two and the ratio of sixteen to nine looked fine.",
+  "pieces": [
+   "The score was three to two and the ratio of sixteen to nine looked fine."
+  ]
+ },
+ {
+  "text": "Call 1-800-829-1040, PIN 0420, card ending in 4459.",
+  "spoken": "Call one eight hundred, eight two nine, one zero four zero, PIN zero four two zero, card ending in four four five nine.",
+  "pieces": [
+   "Call one eight hundred, eight two nine, one zero four zero, PIN zero four two zero, card ending in four four five nine."
+  ]
+ },
+ {
+  "text": "I'll be there from 9am-5pm, Mon-Fri, until Dec. 24.",
+  "spoken": "I'll be there from nine AM to five PM, Monday to Friday, until December twenty fourth.",
+  "pieces": [
+   "I'll be there from nine AM to five PM, Monday to Friday, until December twenty fourth."
+  ]
+ },
+ {
+  "text": "x^2 + 3x - 2 = 11, and 6.02 x 10^23 is huge.",
+  "spoken": "x squared plus three x minus two equals eleven, and six point zero two times ten to the twenty third is huge.",
+  "pieces": [
+   "x squared plus three x minus two equals eleven, and six point zero two times ten to the twenty third is huge."
+  ]
+ },
+ {
+  "text": "C6H12O6 and H2O are formulas; order ORD-9Q2-77L arrived.",
+  "spoken": "C six H twelve O six and H two O are formulas; order O R D nine Q two seven seven L arrived.",
+  "pieces": [
+   "C six H twelve O six and H two O are formulas; order O R D nine Q two seven seven L arrived."
+  ]
+ },
+ {
+  "text": "It's 2:03:45 long and starts at 12:00:30.",
+  "spoken": "It's two hours, three minutes, forty five seconds long and starts at twelve o'clock and thirty seconds.",
+  "pieces": [
+   "It's two hours, three minutes, forty five seconds long and starts at twelve o'clock and thirty seconds."
+  ]
+ },
+ {
+  "text": "World War II ended in 1945; WW1 began in 1914.",
+  "spoken": "World War two ended in nineteen forty five; World War One began in nineteen fourteen.",
+  "pieces": [
+   "World War two ended in nineteen forty five; World War One began in nineteen fourteen."
+  ]
+ }
+]

@@ -1,6 +1,6 @@
 import { createLifecycle, sameInputs } from "../ui/lifecycle";
 import { createPlaybackMachine, createStateMachine } from "../state/machine";
-import { appSettings, type SupertonicVoiceId, type TtsProvider } from "../config/settings";
+import { appSettings, type SupertonicVoiceId, type TtsProvider, type WoofVoiceId } from "../config/settings";
 import type { RuntimeTtsSettings } from "../config/settingsOptions";
 import type { TranscriptSentence, TranscriptWord } from "../transcript/timedTranscript";
 import { splitSpeechPhrases } from "./subtitlePhrases";
@@ -96,7 +96,12 @@ export function createSubtitleSpeech(...initialInputs: [
         "speechSynthesis" in window &&
         "SpeechSynthesisUtterance" in window;
     let isSupertonicSupported = typeof window !== "undefined" && "gpu" in navigator;
-    let isSelectedProviderSupported = provider === "web-speech" ? isSpeechSupported : isSupertonicSupported;
+    // Woof runs on the CPU in WebAssembly, so it needs no GPU.
+    const isWoofSupported = typeof Worker !== "undefined" && typeof WebAssembly === "object";
+    const isProviderSupported = (value: TtsProvider) => value === "web-speech" ? isSpeechSupported : value === "woof" ? isWoofSupported : isSupertonicSupported;
+    let isSelectedProviderSupported = isProviderSupported(provider);
+    // Cancels model voice requests that have not started when playback stops or moves on.
+    const modelAbortRef = { current: new AbortController() };
     const setProvider = (value: TtsProvider) => setSettingsValue({ provider: value });
     const setIsSpeechEnabled = (value: boolean) => setSettingsValue({ enabled: value });
     const setSelectedVoiceId = (value: string) => setSettingsValue({ selectedVoiceId: value });
@@ -113,6 +118,8 @@ export function createSubtitleSpeech(...initialInputs: [
     };
     const interruptCurrentOutput = () => {
         speechRunRef.current += 1;
+        modelAbortRef.current.abort();
+        modelAbortRef.current = new AbortController();
         if (pendingTimeoutRef.current !== null) {
             window.clearTimeout(pendingTimeoutRef.current);
             pendingTimeoutRef.current = null;
@@ -289,12 +296,36 @@ export function createSubtitleSpeech(...initialInputs: [
         };
         speakNext();
     };
-    const speakWithSupertonic = async (phrases: string[], runId: number) => {
+    const modelVoiceName = () => {
+        if (provider === "woof")
+            return `${appSettings.tts.woof.voices.find((voice) => voice.id === selectedVoiceId)?.name ?? "Juno"} (Underdog Woof)`;
+        return `Supertonic ${selectedVoiceId}`;
+    };
+    const woofVoiceId = () => appSettings.tts.woof.voices.some((voice) => voice.id === selectedVoiceId)
+        ? (selectedVoiceId as WoofVoiceId)
+        : appSettings.tts.woof.defaultVoiceId;
+    /** Audio for `value` from the selected local model voice. */
+    const synthesizeModelVoice = async (value: string) => {
+        if (provider === "woof") {
+            const { synthesizeWoofSpeech } = await import("./woofTts");
+            return synthesizeWoofSpeech(value, woofVoiceId(), { signal: modelAbortRef.current.signal, onStatus: setSpeechStatus });
+        }
+        const { synthesizeSupertonicSpeech } = await import("./supertonicTts");
+        const voiceId = appSettings.tts.supertonic.voices.some((voice) => voice.id === selectedVoiceId)
+            ? (selectedVoiceId as SupertonicVoiceId)
+            : appSettings.tts.supertonic.defaultVoiceId;
+        return synthesizeSupertonicSpeech(value, voiceId);
+    };
+    /** Woof makes the next sentence while this one plays. */
+    const prefetchModelVoice = (value: string) => {
+        if (provider !== "woof")
+            return;
+        const voiceId = woofVoiceId();
+        const signal = modelAbortRef.current.signal;
+        void import("./woofTts").then(({ prefetchWoofSpeech }) => prefetchWoofSpeech(value, voiceId, signal));
+    };
+    const speakWithModelVoice = async (phrases: string[], runId: number) => {
         try {
-            const { synthesizeSupertonicSpeech } = await import("./supertonicTts");
-            const voiceId = appSettings.tts.supertonic.voices.some((voice) => voice.id === selectedVoiceId)
-                ? (selectedVoiceId as SupertonicVoiceId)
-                : appSettings.tts.supertonic.defaultVoiceId;
             if (phrases.length === 0)
                 return;
             const playPhrase = async (phraseIndex: number): Promise<void> => {
@@ -308,8 +339,10 @@ export function createSubtitleSpeech(...initialInputs: [
                 setActivePhraseIndex(phraseIndex);
                 setActivePhraseText(phrase.trim());
                 setIsSpeaking(true);
-                setSpeechStatus(`Generating phrase ${phraseIndex + 1}/${phrases.length} with Supertonic ${selectedVoiceId}.`);
-                const blob = await synthesizeSupertonicSpeech(phrase.trim(), voiceId);
+                setSpeechStatus(`Generating phrase ${phraseIndex + 1}/${phrases.length} with ${modelVoiceName()}.`);
+                const blob = await synthesizeModelVoice(phrase.trim());
+                if (phrases[phraseIndex + 1])
+                    prefetchModelVoice(phrases[phraseIndex + 1].trim());
                 if (speechRunRef.current !== runId)
                     return;
                 const url = URL.createObjectURL(blob);
@@ -317,7 +350,7 @@ export function createSubtitleSpeech(...initialInputs: [
                 const audio = new Audio(url);
                 audio.volume = settings.volume;
                 mediaRef.current = audio;
-                audio.onplay = () => setSpeechStatus(`Speaking phrase ${phraseIndex + 1}/${phrases.length} with Supertonic ${selectedVoiceId}.`);
+                audio.onplay = () => setSpeechStatus(`Speaking phrase ${phraseIndex + 1}/${phrases.length} with ${modelVoiceName()}.`);
                 audio.onended = () => {
                     if (mediaUrlRef.current) {
                         URL.revokeObjectURL(mediaUrlRef.current);
@@ -334,7 +367,7 @@ export function createSubtitleSpeech(...initialInputs: [
                         mediaUrlRef.current = null;
                     }
                     resetActiveSpeech();
-                    setSpeechStatus("Supertonic audio playback failed.");
+                    setSpeechStatus("Voice playback failed.");
                 };
                 await audio.play();
             };
@@ -344,7 +377,7 @@ export function createSubtitleSpeech(...initialInputs: [
             if (speechRunRef.current !== runId)
                 return;
             resetActiveSpeech();
-            setSpeechStatus(error instanceof Error ? error.message : "Supertonic speech synthesis failed.");
+            setSpeechStatus(error instanceof Error ? error.message : "Speech synthesis failed.");
         }
     };
     const speak = (value: string, options?: {
@@ -363,7 +396,7 @@ export function createSubtitleSpeech(...initialInputs: [
             speakWithWebSpeech(phrases, runId);
         }
         else {
-            void speakWithSupertonic(phrases, runId);
+            void speakWithModelVoice(phrases, runId);
         }
     };
     const playSourceSentence = (target: SentencePlaybackTarget, runId: number) => {
@@ -510,20 +543,20 @@ export function createSubtitleSpeech(...initialInputs: [
         window.speechSynthesis.cancel();
         window.speechSynthesis.speak(utterance);
     };
-    const speakSentenceWithSupertonic = async (sentence: TranscriptSentence, runId: number, onDone: () => void = resetActiveSpeech) => {
+    const speakSentenceWithModelVoice = async (sentence: TranscriptSentence, runId: number, onDone: () => void = resetActiveSpeech) => {
         try {
-            const { synthesizeSupertonicSpeech } = await import("./supertonicTts");
-            const voiceId = appSettings.tts.supertonic.voices.some((voice) => voice.id === selectedVoiceId)
-                ? (selectedVoiceId as SupertonicVoiceId)
-                : appSettings.tts.supertonic.defaultVoiceId;
             setActiveSentenceId(sentence.id);
             setActiveWordIndex(0);
             setActivePhraseText(sentence.text);
             setIsSpeaking(true);
-            setSpeechStatus(`Generating sentence with Supertonic ${selectedVoiceId}.`);
-            const blob = await synthesizeSupertonicSpeech(sentence.text, voiceId);
+            setSpeechStatus(`Generating sentence with ${modelVoiceName()}.`);
+            const blob = await synthesizeModelVoice(sentence.text);
             if (speechRunRef.current !== runId)
                 return;
+            const queue = sentenceQueueRef.current;
+            const upcoming = queue?.sentences[queue.index + 1];
+            if (upcoming)
+                prefetchModelVoice(upcoming.text);
             const url = URL.createObjectURL(blob);
             mediaUrlRef.current = url;
             const audio = new Audio(url);
@@ -538,7 +571,7 @@ export function createSubtitleSpeech(...initialInputs: [
                 wordFrameRef.current = window.requestAnimationFrame(tick);
             };
             audio.onplay = () => {
-                setSpeechStatus(`Speaking sentence with Supertonic ${selectedVoiceId}.`);
+                setSpeechStatus(`Speaking sentence with ${modelVoiceName()}.`);
                 if (wordFrameRef.current === null)
                     wordFrameRef.current = window.requestAnimationFrame(tick);
             };
@@ -557,7 +590,7 @@ export function createSubtitleSpeech(...initialInputs: [
             };
             audio.onerror = () => {
                 resetActiveSpeech();
-                setSpeechStatus("Supertonic audio playback failed.");
+                setSpeechStatus("Voice playback failed.");
             };
             if (!state.isPlaybackPaused)
                 await audio.play();
@@ -566,7 +599,7 @@ export function createSubtitleSpeech(...initialInputs: [
             if (speechRunRef.current !== runId)
                 return;
             resetActiveSpeech();
-            setSpeechStatus(error instanceof Error ? error.message : "Supertonic speech synthesis failed.");
+            setSpeechStatus(error instanceof Error ? error.message : "Speech synthesis failed.");
         }
     };
     const speakQueuedSentence = (runId: number) => {
@@ -585,7 +618,7 @@ export function createSubtitleSpeech(...initialInputs: [
         if (provider === "web-speech")
             speakSentenceWithWebSpeech(sentence, runId, speakNext);
         else
-            void speakSentenceWithSupertonic(sentence, runId, speakNext);
+            void speakSentenceWithModelVoice(sentence, runId, speakNext);
     };
     /** Read sentences in order with the selected voice, highlighting each word. */
     const playAll = (sentences: TranscriptSentence[]) => {
@@ -657,7 +690,7 @@ export function createSubtitleSpeech(...initialInputs: [
             speakSentenceWithWebSpeech(sentence, runId);
         }
         else {
-            void speakSentenceWithSupertonic(sentence, runId);
+            void speakSentenceWithModelVoice(sentence, runId);
         }
     };
     let browserVoiceOptions: SubtitleVoiceOption[] = state.webSpeechVoices.map((voice) => ({
@@ -672,7 +705,14 @@ export function createSubtitleSpeech(...initialInputs: [
         provider: "supertonic-web",
         lang: appSettings.tts.supertonic.language
     }));
-    let voiceOptions: SubtitleVoiceOption[] = provider === "web-speech" ? browserVoiceOptions : modelVoiceOptions;
+    const woofVoiceOptions: SubtitleVoiceOption[] = appSettings.tts.woof.voices.map((voice) => ({
+        id: voice.id,
+        name: voice.name,
+        provider: "woof",
+        lang: "en"
+    }));
+    const getVoiceOptions = () => provider === "web-speech" ? browserVoiceOptions : provider === "woof" ? woofVoiceOptions : modelVoiceOptions;
+    let voiceOptions: SubtitleVoiceOption[] = getVoiceOptions();
     const snapshot = () => ({
         isSpeechEnabled,
         isSpeechSupported: isSelectedProviderSupported,
@@ -689,6 +729,7 @@ export function createSubtitleSpeech(...initialInputs: [
         voiceOptions,
         browserVoiceOptions,
         modelVoiceOptions,
+        woofVoiceOptions,
         setProvider,
         setIsSpeechEnabled,
         setSelectedVoiceId,
@@ -712,7 +753,7 @@ export function createSubtitleSpeech(...initialInputs: [
             "speechSynthesis" in window &&
             "SpeechSynthesisUtterance" in window;
         isSupertonicSupported = typeof window !== "undefined" && "gpu" in navigator;
-        isSelectedProviderSupported = provider === "web-speech" ? isSpeechSupported : isSupertonicSupported;
+        isSelectedProviderSupported = isProviderSupported(provider);
         browserVoiceOptions = state.webSpeechVoices.map((voice) => ({
             id: voice.voiceURI,
             name: `${voice.name} (${voice.lang})`,
@@ -725,7 +766,7 @@ export function createSubtitleSpeech(...initialInputs: [
             provider: "supertonic-web",
             lang: appSettings.tts.supertonic.language
         }));
-        voiceOptions = provider === "web-speech" ? browserVoiceOptions : modelVoiceOptions;
+        voiceOptions = getVoiceOptions();
         scope.watch("browser-voices", [isSpeechSupported], () => {
             if (!isSpeechSupported)
                 return;
@@ -735,6 +776,12 @@ export function createSubtitleSpeech(...initialInputs: [
             return () => window.speechSynthesis.removeEventListener("voiceschanged", updateVoices);
         });
         scope.watch("selected-voice", [provider, selectedVoiceId, setSelectedVoiceId, state.webSpeechVoices], () => {
+            if (provider === "woof") {
+                if (!appSettings.tts.woof.voices.some((voice) => voice.id === selectedVoiceId)) {
+                    setSelectedVoiceId(appSettings.tts.woof.defaultVoiceId);
+                }
+                return;
+            }
             if (provider === "supertonic-web") {
                 const hasSupertonicVoice = appSettings.tts.supertonic.voices.some((voice) => voice.id === selectedVoiceId);
                 if (!hasSupertonicVoice) {
@@ -782,6 +829,7 @@ export function createSubtitleSpeech(...initialInputs: [
         get voiceOptions() { return snapshot().voiceOptions; },
         get browserVoiceOptions() { return snapshot().browserVoiceOptions; },
         get modelVoiceOptions() { return snapshot().modelVoiceOptions; },
+        get woofVoiceOptions() { return snapshot().woofVoiceOptions; },
         get setProvider() { return snapshot().setProvider; },
         get setIsSpeechEnabled() { return snapshot().setIsSpeechEnabled; },
         get setSelectedVoiceId() { return snapshot().setSelectedVoiceId; },

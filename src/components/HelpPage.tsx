@@ -25,7 +25,7 @@ export function HelpPage() {
           <span className="section-eyebrow">02 / REVIEW & LISTEN</span>
           <h2 id="help-review">Follow your words</h2>
           <p>Read the text in <strong>Transcript</strong>. Select a completed sentence to hear it, or use the <strong>Play</strong> button to listen to the passage.</p>
-          <p>The <strong>Voice</strong> list under <strong>More options</strong> (the three dots) lets you choose original audio, normalised audio, a browser voice, or a local model voice. Local model voices need WebGPU and download their files on first use.</p>
+          <p>The <strong>Voice</strong> list under <strong>More options</strong> (the three dots) lets you choose original audio, normalised audio, a browser voice, or a local model voice. The Underdog Woof voices, Juno and Mira, download 41 MB once and then work offline on any device. The larger Supertonic voices need WebGPU.</p>
           <p>Use <strong>Map</strong> to see where recorded phrases were captured when location is available. Your browser may ask for location permission; without it, phrases can have an unknown location.</p>
           <p><strong>Using a keyboard?</strong> Press Tab to reach the controls, the search box and then the sentences, and Enter or Space to play one. In the search box, Enter finds the next match and Shift+Enter the previous one. <strong>Go to sentence</strong> moves you to the match, and Escape brings you back to the search box.</p>
         </section>
@@ -59,7 +59,7 @@ export function HelpPage() {
           <ul>
             <li><strong>No microphone audio?</strong> Allow microphone access in your browser’s site permissions, check your device’s microphone settings, and choose the right microphone in Settings.</li>
             <li><strong>Waiting for text?</strong> Check the status bar. The model may still be downloading or processing audio. Try a smaller model if processing is slow.</li>
-            <li><strong>A browser feature is unavailable?</strong> Try a current Chrome or Edge browser. Whisper ONNX and local model voices require WebGPU; Moonshine and Whisper WASM transcription models do not.</li>
+            <li><strong>A browser feature is unavailable?</strong> Try a current Chrome or Edge browser. Whisper ONNX and the Supertonic voices require WebGPU; Moonshine, Whisper WASM and the Underdog Woof voices do not.</li>
             <li><strong>Words don’t look right?</strong> Reduce background noise, speak clearly, and check that the selected model supports the language you are speaking. Review the transcript before sharing it.</li>
           </ul>
         </section>

@@ -1,5 +1,5 @@
 import type { LocatedTranscriptSentence, LocationFix } from "./locatedTranscript";
-import type { RecordingExportFormat, SupertonicVoiceId } from "../config/settings";
+import type { RecordingExportFormat, SupertonicVoiceId, WoofVoiceId } from "../config/settings";
 import { getRecordingExportTarget, runFfmpegJob } from "../recorder/audioExport";
 import { splitSpeechPhrases } from "../speech/subtitlePhrases";
 import type { TranscriptSentence } from "./timedTranscript";
@@ -140,18 +140,22 @@ export function splitExportPhrases(text: string) {
   });
 }
 
-export async function synthesizeTranscriptAudio(text: string, voiceId: SupertonicVoiceId, onProgress: (message: string) => void) {
-  const { synthesizeSupertonicSamples } = await import("../speech/supertonicTts");
-  const { writeWavFile } = await import("../vendor/supertonic/helper.js");
+/** Reads the transcript with a local model voice: "woof:<voice>" for Underdog Woof, otherwise a Supertonic voice id. */
+export async function synthesizeTranscriptAudio(text: string, voiceId: string, onProgress: (message: string) => void) {
+  const { encodeWav, synthesizeWoofSamples } = await import("../speech/woofTts");
+  const woofVoice = voiceId.startsWith("woof:") ? voiceId.slice("woof:".length) as WoofVoiceId : null;
+  const synthesize = woofVoice
+    ? (phrase: string) => synthesizeWoofSamples(phrase, woofVoice, { onStatus: onProgress })
+    : async (phrase: string) => (await import("../speech/supertonicTts")).synthesizeSupertonicSamples(phrase, voiceId as SupertonicVoiceId);
   const phrases = splitExportPhrases(text);
   if (!phrases.length) throw new Error("There is no transcript to read aloud.");
-  const samples: number[][] = [];
+  const samples: ArrayLike<number>[] = [];
   const captions: CaptionCue[] = [];
   let sampleRate = 0;
   let sampleCount = 0;
   for (const [index, phrase] of phrases.entries()) {
     onProgress(`Generating voice: phrase ${index + 1} of ${phrases.length}…`);
-    const audio = await synthesizeSupertonicSamples(phrase, voiceId);
+    const audio = await synthesize(phrase);
     if (!audio.samples.length || !audio.sampleRate || (sampleRate && sampleRate !== audio.sampleRate)) {
       throw new Error("The voice model returned incompatible or empty audio. Please try again.");
     }
@@ -163,7 +167,7 @@ export async function synthesizeTranscriptAudio(text: string, voiceId: Supertoni
   const combined = new Float32Array(sampleCount);
   let offset = 0;
   for (const part of samples) { combined.set(part, offset); offset += part.length; }
-  return { blob: new Blob([writeWavFile(combined, sampleRate)], { type: "audio/wav" }), captions };
+  return { blob: new Blob([encodeWav(combined, sampleRate)], { type: "audio/wav" }), captions };
 }
 
 export async function exportTranscriptMedia(

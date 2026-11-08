@@ -18,7 +18,7 @@ import { PhraseLocationMap } from "./components/PhraseLocationMap";
 import { SimpleSettings } from "./components/SimpleSettings";
 import type { PageStyleSettings } from "./config/pageStyle";
 import { cloneRuntimeSettings, defaultRuntimeSettings, encodeSettingsInUrl, getTranscriptionModelOption, readSettingsFromUrl, type RuntimeTtsSettings, type SettingsOption } from "./config/settingsOptions";
-import type { TranscriptionModelId } from "./config/settings";
+import { appSettings, type TranscriptionModelId } from "./config/settings";
 import { getTypefaceAssFamily } from "./config/typefaces";
 import { createTranscriber } from "./recorder/createTranscriber";
 import { createSubtitleSpeech } from "./speech/createSubtitleSpeech";
@@ -31,7 +31,7 @@ import { describeSentence, formatClock } from "./transcript/sentenceMeta";
 import { TranscriptParagraph } from "./components/TranscriptParagraph";
 import { SavedSessions } from "./components/SavedSessions";
 import type { TranscriptParagraph as TranscriptParagraphData } from "./transcript/timedTranscript";
-type TranscriptPlaybackChoice = "source:original" | "source:normalized" | `web:${string}` | `model:${string}`;
+type TranscriptPlaybackChoice = "source:original" | "source:normalized" | `web:${string}` | `woof:${string}` | `model:${string}`;
 const PLAYBACK_SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 const MEDIA_FILE_PATTERN = /\.(aac|aiff?|avi|flac|m4a|m4v|mkv|mov|mp3|mp4|oga|ogg|opus|wav|webm|wma)$/i;
 const LONG_PRESS_MS = 500;
@@ -193,6 +193,17 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
             ]
         },
         {
+            // Small and runs on any device, so it comes before the heavier model below.
+            group: `Underdog Woof · ${appSettings.tts.woof.downloadMegabytes} MB, works offline`,
+            items: speech.woofVoiceOptions.map((voice) => ({
+                description: "Local Underdog Woof voice, rendered on this device.",
+                disabled: false,
+                icon: "◆",
+                label: `${voice.name} (Woof)`,
+                value: `woof:${voice.id}` as TranscriptPlaybackChoice
+            }))
+        },
+        {
             group: "Built-in TTS Voices",
             items: speech.browserVoiceOptions.map((voice) => ({
                 description: voice.lang ? `Browser speech synthesis voice, ${voice.lang}.` : "Browser speech synthesis voice.",
@@ -203,7 +214,7 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
             }))
         },
         {
-            group: "Local Model Voices",
+            group: "Supertonic · 398 MB, needs WebGPU",
             items: speech.modelVoiceOptions.map((voice) => ({
                 description: "Local model voice rendered through the WebGPU voice engine.",
                 disabled: false,
@@ -388,6 +399,13 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
             });
             return;
         }
+        if (value.startsWith("woof:")) {
+            updateTtsSettings({
+                provider: "woof",
+                selectedVoiceId: value.slice("woof:".length)
+            });
+            return;
+        }
         if (value.startsWith("model:")) {
             updateTtsSettings({
                 provider: "supertonic-web",
@@ -532,7 +550,20 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
                     <svg className="record-spinner" viewBox="0 0 100 100" aria-hidden="true" data-determinate={workProgress === null ? undefined : "true"}>
                       <circle cx="50" cy="50" r="45" pathLength="100" style={workProgress === null ? undefined : { strokeDasharray: `${workProgress} 100` }} />
                     </svg>
-                    <span className="record-glyph" aria-hidden="true" />
+                    {/* The goo filter blurs the shapes together and sharpens the alpha again, so the dot melts into the bars. */}
+                    <svg className="record-glyph" viewBox="0 0 60 60" aria-hidden="true">
+                      <defs>
+                        <filter id="record-goo" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+                          <feGaussianBlur in="SourceGraphic" stdDeviation="3" />
+                          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 14 -6" />
+                        </filter>
+                      </defs>
+                      <g filter="url(#record-goo)">
+                        <circle className="record-dot" cx="30" cy="30" r="25" />
+                        <rect className="record-bar" x="16" y="15" width="10" height="30" rx="2" />
+                        <rect className="record-bar" x="34" y="15" width="10" height="30" rx="2" />
+                      </g>
+                    </svg>
                   </button>
                   <button className="settings-button" type="button" onClick={() => setIsSettingsOpen(true)} aria-label="Settings" title="Settings">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -581,6 +612,7 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
                     {transcriptPlaybackOptions.map((group) => <optgroup key={group.group} label={group.group}>{group.items.map((item) => <option key={item.value} value={item.value} disabled={item.disabled}>{item.label}</option>)}</optgroup>)}
                   </select>
                         </label>
+                        <a className="voice-credit" href={appSettings.tts.woof.creditUrl} target="_blank" rel="noreferrer" hidden={!state.transcriptPlaybackChoice.startsWith("woof:")}>Voice by Underdog Woof</a>
                         <label>Speed
                           <select aria-label="Playback speed" className="playback-speed" value={String(state.playbackRate)}
                     onChange={(event: DomEvent<Event, HTMLSelectElement>) => { const rate = Number(event.currentTarget.value); setPlaybackRate(rate); speech.setPlaybackRate(rate); }}>
@@ -615,6 +647,10 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
                   </details>
                 </div> : null}
               </header> : null}
+              {hasWorkspace && speech.provider === "woof" && sentencePlaybackMode === "tts" && speech.isSpeaking ? <p className="voice-status" role="status">
+                <span>{speech.speechStatus}</span>
+                <a className="voice-credit" href={appSettings.tts.woof.creditUrl} target="_blank" rel="noreferrer">Voice by Underdog Woof</a>
+              </p> : null}
               {recorder.error ? <p className="error" role="alert">{recorder.error}</p> : null}
               {recorder.opfsError ? <p className="error" role="alert">Saving failed: {recorder.opfsError}</p> : null}
               {hasWorkspace ? <section ref={transcriptRef} id="transcript-panel" hidden={view === "map"} className="transcript" role="tabpanel" aria-labelledby="transcript-tab" aria-label="Transcript" aria-live="polite" onKeyDown={returnToSearch}>
@@ -676,7 +712,7 @@ const App = defineElement<Record<string, never>>("wt-app", (initialProps, host) 
         playbackText = transcriptBlocks.join("\n").trim();
         hasSourceAudio = Boolean(recorder.sourceMedia || recorder.hasRecordingAudio || recorder.opfsChunkCount > 0);
         {
-            const inputs = [hasSourceAudio, speech.browserVoiceOptions, speech.modelVoiceOptions];
+            const inputs = [hasSourceAudio, speech.browserVoiceOptions, speech.woofVoiceOptions, speech.modelVoiceOptions];
             if (!sameInputs(calculatetranscriptPlaybackOptionsInputs, inputs)) {
                 transcriptPlaybackOptions = calculatetranscriptPlaybackOptions();
                 calculatetranscriptPlaybackOptionsInputs = inputs;

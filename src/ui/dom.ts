@@ -10,7 +10,7 @@ type ManagedNode = Node & {
     domProps?: Props;
     domKey?: string | number;
 };
-const svgTags = new Set(["svg", "path", "circle", "line", "polyline", "polygon", "rect", "ellipse", "g"]);
+const svgTags = new Set(["svg", "path", "circle", "line", "polyline", "polygon", "rect", "ellipse", "g", "defs", "filter", "feGaussianBlur", "feColorMatrix"]);
 export function Fragment(props: {
     children?: DomContent;
 }) { return fragment(props.children); }

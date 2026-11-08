@@ -19,7 +19,7 @@ Microphone transcription defaults to browser speech recognition only when `proce
 - Text, SRT, VTT, GPX, GeoJSON, audio and captioned video downloads
 - Screen wake lock while recording, and a clear pause if the microphone is disconnected
 - Moonshine models through the official browser WASM runtime, and Whisper through Transformers.js WebGPU or whisper.cpp WASM
-- Optional read-aloud with Web Speech API voices or Supertonic WebGPU voices
+- Optional read-aloud with Web Speech API voices, the small Underdog Woof voices (Juno and Mira, 41 MB, any device), or the larger Supertonic WebGPU voices
 
 ## Requirements
 
@@ -37,7 +37,7 @@ installable as an app through `manifest.webmanifest`. These still need a network
 then kept on the device:
 
 - the on-device speech language pack, or the Moonshine model (Settings has a button to download it ahead of time). Uploads always use the model, because browser speech cannot read files
-- the optional Supertonic voices and the ffmpeg encoder used for audio conversion and video export
+- the optional Underdog Woof and Supertonic voices, and the ffmpeg encoder used for audio conversion and video export
 
 Map images come from OpenStreetMap, which sees the area being viewed; recordings and text are
 never sent. Areas already viewed stay available offline, and without images the route,
@@ -258,6 +258,31 @@ recordings/
 - Stored audio chunks use the browser's selected `MediaRecorder` MIME type, usually WebM/Opus.
 - The optional subtitle overlay is generated as ASS content and rendered through JASSUB, with worker/WASM/font assets bundled by Vite.
 - Subtitle read-aloud can use `SpeechSynthesisUtterance` or the Supertonic browser helper vendored from `supertone-inc/supertonic`. Supertonic is loaded lazily, downloads static model assets from Hugging Face, runs through `onnxruntime-web` with the `webgpu` execution provider, and uses the M1-M5/F1-F5 voice presets.
+
+## Underdog Woof Voices
+
+[Underdog Woof](https://underdog.ai/woof) is a small English text-to-speech model with two voices, Juno and Mira. It is
+listed before Supertonic because it is a tenth of the size (41 MB) and needs no GPU: it runs on the CPU in a worker,
+through WebAssembly SIMD. It is not loaded until a Woof voice is chosen and used.
+
+The worker downloads `woof_int8.npz` and `underdog_woof/respell.tsv` from
+[`ConwayResearch/Underdog-Woof`](https://huggingface.co/ConwayResearch/Underdog-Woof) at a pinned revision, and keeps
+them in the Cache API so the voice works offline afterwards. The model's Python runtime is ported to TypeScript in
+`src/speech/woof/`; see its [README](src/speech/woof/README.md) for what was changed and how it was checked.
+
+Woof and that folder are licensed under the [Underdog Non-Commercial License 1.0](src/speech/woof/LICENSE), separately
+from this app. It is free for personal projects, research, teaching and non-profits, with credit; commercial use needs a
+license from license@conway.tech. The app shows "Voice by Underdog Woof" with a link to underdog.ai wherever the voice
+is offered or plays, and audio downloaded with it should name "Underdog Woof" wherever it is shared.
+
+To rebuild the WebAssembly kernels after editing `scripts/build-woof-kernels.mjs`:
+
+```sh
+npx -y -p wabt@1.0.36 node scripts/build-woof-kernels.mjs
+```
+
+Set `WOOF_FILES` to a folder holding `woof_int8.npz` and `respell.tsv` to run the end-to-end test that speaks with the
+real model; without it that test is skipped.
 
 ## Supertonic Voices
 

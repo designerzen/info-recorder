@@ -121,6 +121,7 @@ export const defaultRuntimeSettings: RuntimeSettings = {
   },
   tts: {
     ...appSettings.tts,
+    woof: { ...appSettings.tts.woof, voices: appSettings.tts.woof.voices.map((voice) => ({ ...voice })) },
     supertonic: {
       ...appSettings.tts.supertonic,
       voices: appSettings.tts.supertonic.voices.map((voice) => ({ ...voice }))
@@ -140,7 +141,8 @@ export const vadModeOptions: SelectOption<VadMode>[] = [
 
 export const ttsProviderOptions: SelectOption<TtsProvider>[] = [
   { value: "web-speech", label: "Browser voices" },
-  { value: "supertonic-web", label: "Supertonic WebGPU" }
+  { value: "woof", label: "Underdog Woof (41 MB)" },
+  { value: "supertonic-web", label: "Supertonic (398 MB, WebGPU)" }
 ];
 
 export const sentencePlaybackModeOptions: SelectOption<SentencePlaybackMode>[] = [
@@ -844,6 +846,7 @@ export function cloneRuntimeSettings(settings: RuntimeSettings): RuntimeSettings
     recording: { ...settings.recording },
     tts: {
       ...settings.tts,
+      woof: { ...settings.tts.woof, voices: settings.tts.woof.voices.map((voice) => ({ ...voice })) },
       supertonic: {
         ...settings.tts.supertonic,
         voices: settings.tts.supertonic.voices.map((voice) => ({ ...voice }))

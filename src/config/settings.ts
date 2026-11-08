@@ -5,7 +5,7 @@ export type VadMode =
   | "silero-vad"
   | "transformers-audio-classification";
 
-export type TtsProvider = "web-speech" | "supertonic-web";
+export type TtsProvider = "web-speech" | "woof" | "supertonic-web";
 export type RecordingExportFormat = "native" | "ogg-vorbis" | "ogg-opus" | "mp3" | "flac" | "wav";
 export type SentencePlaybackMode = "tts" | "source-audio";
 import { defaultTypeface } from "./typefaces";
@@ -41,6 +41,8 @@ export type MoonshineModelId =
   | "moonshine:small-streaming-en"
   | "moonshine:medium-streaming-en";
 export type TranscriptionModelId = OnnxTranscriptionModelId | WasmTranscriptionModelId | MoonshineModelId;
+
+export type WoofVoiceId = "juno" | "mira";
 
 export type SupertonicVoiceId =
   | "M1"
@@ -127,6 +129,15 @@ export type AppSettings = {
     rate: number;
     pitch: number;
     volume: number;
+    woof: {
+      weightsUrl: string;
+      lexiconUrl: string;
+      cacheName: string;
+      downloadMegabytes: number;
+      defaultVoiceId: WoofVoiceId;
+      creditUrl: string;
+      voices: Array<{ id: WoofVoiceId; name: string }>;
+    };
     supertonic: {
       assetsBasePath: string;
       onnxDir: string;
@@ -218,6 +229,19 @@ export const appSettings: AppSettings = {
     rate: 1,
     pitch: 1,
     volume: 0.9,
+    // Pinned to the revision the TypeScript runtime was checked against.
+    woof: {
+      weightsUrl: "https://huggingface.co/ConwayResearch/Underdog-Woof/resolve/be702960539777fc3f698e54335276a8391b00f9/woof_int8.npz",
+      lexiconUrl: "https://huggingface.co/ConwayResearch/Underdog-Woof/resolve/be702960539777fc3f698e54335276a8391b00f9/underdog_woof/respell.tsv",
+      cacheName: "underdog-woof-be70296",
+      downloadMegabytes: 41,
+      defaultVoiceId: "juno",
+      creditUrl: "https://underdog.ai/woof",
+      voices: [
+        { id: "juno", name: "Juno" },
+        { id: "mira", name: "Mira" }
+      ]
+    },
     supertonic: {
       assetsBasePath: "https://huggingface.co/Supertone/supertonic-3/resolve/main",
       onnxDir: "https://huggingface.co/Supertone/supertonic-3/resolve/main/onnx",

@@ -4,6 +4,7 @@ import { createStateMachine } from "../state/machine";
 import { Mic, Palette, RotateCcw, Save, SlidersHorizontal, Volume2, X } from "../ui/icons";
 import { PageSettingsControls } from "./PageSettingsDialog";
 import type { PageStyleSettings } from "../config/pageStyle";
+import { appSettings } from "../config/settings";
 import { getTranscriptionModelOption, settingsOptions, transcriptionModelOptions, type RuntimeSettings, type SettingsOption } from "../config/settingsOptions";
 import { estimateSecondsRemaining, formatBytes, formatDuration, type ModelInventoryEntry } from "../recorder/modelInventory";
 type SimpleSettingsProps = {
@@ -152,6 +153,9 @@ export const SimpleSettings = defineElement<SimpleSettingsProps>("wt-simple-sett
                       </option>))) : (<option value={selectedVoiceId}>Default</option>)}
                 </select>
               </label>
+              {settings.tts.provider === "woof" ? <p className="settings-hint settings-wide">
+                <a className="voice-credit" href={appSettings.tts.woof.creditUrl} target="_blank" rel="noreferrer">Voice by Underdog Woof</a>. A {appSettings.tts.woof.downloadMegabytes} MB download the first time it speaks, then it works offline on this device. Free for non-commercial use.
+              </p> : null}
             </SettingsGroup>
             <details className="advanced-settings">
               <summary><span>Advanced settings<small>Fine-tune audio processing, timing, and speech.</small></span></summary>

@@ -2,7 +2,7 @@ import { h, Fragment, defineElement, patch } from "../ui/dom";
 import { createLifecycle, sameInputs } from "../ui/lifecycle";
 import { createStateMachine } from "../state/machine";
 import { Download, FileText, Film } from "../ui/icons";
-import { appSettings, type SupertonicVoiceId } from "../config/settings";
+import { appSettings } from "../config/settings";
 import type { TranscriptSentence } from "../transcript/timedTranscript";
 import { buildOriginalCaptions, downloadTranscriptBlob, exportTranscriptMedia, synthesizeTranscriptAudio, type DownloadAudioFormat } from "../transcript/transcriptExport";
 import "./TranscriptDownloads.css";
@@ -41,10 +41,14 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
     const setError = (value: typeof state.error | ((previous: typeof state.error) => typeof state.error)) => machine.send({ type: "error", value });
     const exportLock = { current: false };
     let hasText = Boolean(text.trim());
-    let selectedSource = state.source === "original" && !hasSourceAudio ? appSettings.tts.supertonic.defaultVoiceId : state.source;
+    // Woof runs on the CPU; Supertonic needs WebGPU.
+    const woofDefault = `woof:${appSettings.tts.woof.defaultVoiceId}`;
+    const supportsWoof = typeof Worker !== "undefined" && typeof WebAssembly === "object";
+    let supportsSupertonic = typeof navigator !== "undefined" && Boolean(navigator.gpu);
+    let selectedSource = state.source === "original" && !hasSourceAudio ? woofDefault : state.source;
     let isTts = selectedSource !== "original";
-    let supportsTts = typeof navigator !== "undefined" && Boolean(navigator.gpu);
-    let disabled = busy || state.exporting || !hasText || (isTts && !supportsTts);
+    let isWoof = selectedSource.startsWith("woof:");
+    let disabled = busy || state.exporting || !hasText || (isTts && !(isWoof ? supportsWoof : supportsSupertonic));
     const calculateoriginalCaptions = () => buildOriginalCaptions(sentences);
     let originalCaptions = calculateoriginalCaptions();
     let calculateoriginalCaptionsInputs: readonly unknown[] | undefined;
@@ -61,7 +65,7 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
             let captions = originalCaptions;
             let name = "transcript";
             if (isTts) {
-                const generated = await synthesizeTranscriptAudio(text, selectedSource as SupertonicVoiceId, setStatus);
+                const generated = await synthesizeTranscriptAudio(text, selectedSource, setStatus);
                 blob = generated.blob;
                 captions = generated.captions;
             }
@@ -77,7 +81,7 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
             }
             const result = await exportTranscriptMedia(blob, { format: video ? "mp4" : state.format, speed: state.speed, pitch: state.pitch, captions }, setStatus);
             const stem = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-");
-            const voice = isTts ? `tts-${selectedSource}` : "original";
+            const voice = isTts ? `tts-${isWoof ? `underdog-woof-${selectedSource.slice("woof:".length)}` : selectedSource}` : "original";
             downloadTranscriptBlob(result.blob, `${stem}-${voice}-${state.speed}x-pitch${state.pitch >= 0 ? "+" : ""}${state.pitch}.${result.extension}`);
             setStatus(`${video ? "Captioned video" : "Audio"} download ready.`);
         }
@@ -93,7 +97,7 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
     function render() {
         if (!hasText)
             return null;
-        const showMediaOptions = !textOnly && !busy && (hasSourceAudio || supportsTts);
+        const showMediaOptions = !textOnly && !busy && (hasSourceAudio || supportsWoof || supportsSupertonic);
         return (<section className="transcript-downloads" aria-label="Transcript downloads" aria-busy={state.exporting}>
       {showTextDownload ? <div className="download-heading">
         <button type="button" onClick={() => downloadTranscriptBlob(new Blob([`${text.trim()}\n`], { type: "text/plain;charset=utf-8" }), "transcript.txt")}>
@@ -105,11 +109,17 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
         <label className="download-source">Audio source
           <select value={selectedSource} onChange={(event) => { setSource(event.target.value); setError(""); setStatus(""); }}>
             {hasSourceAudio ? <option value="original">Original recording</option> : null}
-            {supportsTts ? <optgroup label="TTS · local model voices">
-              {appSettings.tts.supertonic.voices.map((voice) => <option key={voice.id} value={voice.id} disabled={!supportsTts}>{voice.name}</option>)}
+            {supportsWoof ? <optgroup label={`TTS · Underdog Woof, ${appSettings.tts.woof.downloadMegabytes} MB`}>
+              {appSettings.tts.woof.voices.map((voice) => <option key={voice.id} value={`woof:${voice.id}`}>{voice.name}</option>)}
+            </optgroup> : null}
+            {supportsSupertonic ? <optgroup label="TTS · Supertonic, 398 MB, WebGPU">
+              {appSettings.tts.supertonic.voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
             </optgroup> : null}
           </select>
         </label>
+        {isWoof ? <p className="download-credit">
+          <a href={appSettings.tts.woof.creditUrl} target="_blank" rel="noreferrer">Voice by Underdog Woof</a>. Free for non-commercial use; credit “Underdog Woof” wherever you share the audio.
+        </p> : null}
         <label>Audio format
           <select value={state.format} onChange={(event) => setFormat(event.target.value as DownloadAudioFormat)}>
             <option value="mp3">MP3</option><option value="wav">WAV</option><option value="flac">FLAC</option>
@@ -134,10 +144,11 @@ export const TranscriptDownloads = defineElement<Props>("wt-transcript-downloads
     }
     function refresh() {
         hasText = Boolean(text.trim());
-        selectedSource = state.source === "original" && !hasSourceAudio ? appSettings.tts.supertonic.defaultVoiceId : state.source;
+        selectedSource = state.source === "original" && !hasSourceAudio ? woofDefault : state.source;
         isTts = selectedSource !== "original";
-        supportsTts = typeof navigator !== "undefined" && Boolean(navigator.gpu);
-        disabled = busy || state.exporting || !hasText || (isTts && !supportsTts);
+        isWoof = selectedSource.startsWith("woof:");
+        supportsSupertonic = typeof navigator !== "undefined" && Boolean(navigator.gpu);
+        disabled = busy || state.exporting || !hasText || (isTts && !(isWoof ? supportsWoof : supportsSupertonic));
         {
             const inputs = [sentences];
             if (!sameInputs(calculateoriginalCaptionsInputs, inputs)) {
