@@ -1037,7 +1037,7 @@ function TranscriptionSupportDialog({ isOpen, requiresCrossOriginIsolation, requ
         </p>
         <p>
           Update to the latest Chrome, Edge, or another Chromium-based browser, then open the app
-          over HTTPS or localhost. WebAssembly must be enabled. Whisper ONNX models also require
+          over HTTPS or localhost. WebAssembly must be enabled. Whisper ONNX and Parakeet models also require
           WebGPU; Moonshine requires COOP and COEP response headers for its threaded WASM runtime.
         </p>
       </section>

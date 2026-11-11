@@ -18,7 +18,7 @@ Microphone transcription defaults to browser speech recognition only when `proce
 - Sentence correction, search and copy, with keyboard jumps from search to a matching sentence and back
 - Text, SRT, VTT, GPX, GeoJSON, audio and captioned video downloads
 - Screen wake lock while recording, and a clear pause if the microphone is disconnected
-- Moonshine models through the official browser WASM runtime, and Whisper through Transformers.js WebGPU or whisper.cpp WASM
+- Parakeet CTC via Transformers.js WebGPU and Nemotron 3.5 ASR int4 via ONNX Runtime WebGPU/WASM, alongside Moonshine models through the official browser WASM runtime, and Whisper through Transformers.js WebGPU or whisper.cpp WASM
 - Optional read-aloud with Web Speech API voices, the small Underdog Woof voices (Juno and Mira, 41 MB, any device), or the larger Supertonic WebGPU voices
 
 ## Requirements
@@ -325,3 +325,13 @@ Run browser checks with `pnpm test:e2e`. Install the matching browser with
 If the browser download is unavailable, local Windows runs automatically use an
 installed Google Chrome browser. The test report names the browser used. CI
 continues to require Playwright's managed Chromium; it does not use this fallback.
+
+### Parakeet and Nemotron transcription
+
+Settings → Transcription model includes all four families: Moonshine (the default), Whisper, Parakeet CTC 0.6B, and Nemotron 3.5 ASR 0.6B int4. Parakeet uses the supported Transformers.js CTC pipeline, with an approximately 612 MB download and WebGPU. Nemotron uses a dedicated ONNX Runtime adapter, with an approximately 791 MB download, WebGPU preferred and WASM fallback. Its English language ID is selected explicitly; the wider model's other languages are not exposed yet.
+
+Both new options report each incoming audio chunk's capture interval as segment timing. They do not provide word alignment, so original-audio seeking and highlighting are coarser than the timestamped Whisper and Moonshine choices. Nemotron uses the model's cache-aware encoder within each chunk and resets between chunks; it does not keep streaming state across recording chunks. Model assets download only when selected for loading and are cached locally for offline use. The existing local browser recognition path for microphone capture is unchanged.
+
+Parakeet model: https://huggingface.co/onnx-community/parakeet-ctc-0.6b-ONNX (NVIDIA, CC BY 4.0). Nemotron weights: https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4 (NVIDIA Open Model License). The Nemotron browser adapter is adapted from MIT-licensed People-11/Nemotron_Web; provenance and license are in `src/recorder/nemotron/`.
+
+The optional real-audio checks in `tests/e2e/transcription-models.spec.ts` run when `PARAKEET_FILES` or `NEMOTRON_FILES` points to a local directory containing that model's files and a 16 kHz `sample.wav` of the JFK “fellow Americans” speech. Parakeet retains its `onnx/` subdirectory. Nemotron uses the pinned revision in `modelAssets.ts`. These checks exercise actual WebGPU/WASM inference; the normal suite skips them and does not download model weights.

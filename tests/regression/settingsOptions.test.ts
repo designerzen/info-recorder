@@ -103,6 +103,8 @@ describe("settingsOptions regressions", () => {
       "onnx-community/whisper-small_timestamped",
       "onnx-community/whisper-medium_timestamped",
       "onnx-community/whisper-large-v3-turbo_timestamped",
+      "onnx-community/parakeet-ctc-0.6b-ONNX",
+      "nemotron:streaming-0.6b-int4",
       "wasm:tiny.en",
       "wasm:tiny",
       "wasm:base.en",

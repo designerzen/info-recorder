@@ -9,7 +9,7 @@ import { findVadBoundaryEnd } from "./uploadBoundaryVad";
 import { resetSileroVadRuntimeState, type SileroVadRuntimeState } from "./sileroVad";
 import type { TranscriptParagraph, TranscriptWord } from "../transcript/timedTranscript";
 import { getTranscriptionRuntimeSupport } from "./runtimeSupport";
-import { isMoonshineModelId, isWasmTranscriptionModelId } from "../config/settings";
+import { isNemotronModelId, isMoonshineModelId, isWasmTranscriptionModelId } from "../config/settings";
 import type { ModelInventoryEntry } from "./modelInventory";
 import { GeoLocationService, type LocationStatus } from "./geoLocationService";
 import { appendSessionAudio, deleteSession as deleteStoredSession, listSessions as listStoredSessions, loadSession, saveSession, saveSessionMedia, type SavedSession } from "./sessionStore";
@@ -315,7 +315,7 @@ export function createTranscriber(...initialInputs: [
     const worker = (() => new Worker(new URL("./whisperWorker.ts", import.meta.url), { type: "module" }))();
     let runtimeSupport = getTranscriptionRuntimeSupport();
     let requiresWebGpu = !isWasmTranscriptionModelId(settings.transcription.modelId) &&
-        !isMoonshineModelId(settings.transcription.modelId);
+        !isMoonshineModelId(settings.transcription.modelId) && !isNemotronModelId(settings.transcription.modelId);
     let requiresCrossOriginIsolation = isMoonshineModelId(settings.transcription.modelId);
     const canUseSelectedModel = () => runtimeSupport.hasWebAssembly &&
         runtimeSupport.isSecureContext &&
@@ -1651,7 +1651,7 @@ export function createTranscriber(...initialInputs: [
     function refresh() {
         runtimeSupport = getTranscriptionRuntimeSupport();
         requiresWebGpu = !isWasmTranscriptionModelId(settings.transcription.modelId) &&
-            !isMoonshineModelId(settings.transcription.modelId);
+            !isMoonshineModelId(settings.transcription.modelId) && !isNemotronModelId(settings.transcription.modelId);
         requiresCrossOriginIsolation = isMoonshineModelId(settings.transcription.modelId);
         isTranscriptionSupported = canUseSelectedModel() ||
             (runtimeSupport.isSecureContext && settings.transcription.task === "transcribe" && supportsLocalSpeechRecognition());

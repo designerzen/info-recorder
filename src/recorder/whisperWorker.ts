@@ -34,7 +34,11 @@ import { createTransformersOpfsCache } from "./transformersOpfsCache";
 
 type AutomaticSpeechRecognitionPipelineType = AllTasks["automatic-speech-recognition"];
 type AudioSamples = Float32Array<ArrayBuffer>;
-type LoadedModel = AutomaticSpeechRecognitionPipelineType | WhisperWasmService | MoonshineTranscriber;
+type NemotronBrowserASR = import("./nemotron/nemotron").NemotronBrowserASR;
+const NEMOTRON_MODEL_ID = "nemotron:streaming-0.6b-int4";
+const PARAKEET_MODEL_ID = "onnx-community/parakeet-ctc-0.6b-ONNX";
+
+type LoadedModel = AutomaticSpeechRecognitionPipelineType | WhisperWasmService | MoonshineTranscriber | NemotronBrowserASR;
 
 type InboundMessage =
   | { type: "configure"; transcription: AppSettings["transcription"] }
@@ -83,6 +87,7 @@ env.useCustomCache = "storage" in navigator && "getDirectory" in navigator.stora
 env.customCache = env.useCustomCache ? createTransformersOpfsCache() : null;
 env.cacheKey = CACHE_NAME;
 
+let nemotronTranscriber: NemotronBrowserASR | null = null;
 let transcriber: AutomaticSpeechRecognitionPipelineType | null = null;
 let wasmTranscriber: WhisperWasmService | null = null;
 let moonshineTranscriber: MoonshineTranscriber | null = null;
@@ -150,6 +155,28 @@ self.onmessage = ({ data }: MessageEvent<InboundMessage>) => {
 };
 
 async function load() {
+  if (transcriptionSettings.modelId === NEMOTRON_MODEL_ID) {
+    if (!loadingPromise) {
+      loadingPromise = (async () => {
+        const { NemotronBrowserASR } = await import("./nemotron/nemotron");
+        const model = new NemotronBrowserASR();
+        try {
+          await model.load((message) => postMessage({ type: "progress", message, progress: 0 }));
+          nemotronTranscriber = model;
+          return model;
+        } catch (error) {
+          await model.close();
+          loadingPromise = null;
+          throw error;
+        }
+      })();
+    }
+    const model = await loadingPromise;
+    await postCacheStatus();
+    postMessage({ type: "ready" });
+    return model;
+  }
+
   if (isMoonshineModelId(transcriptionSettings.modelId)) {
     return loadMoonshineModel();
   }
@@ -283,6 +310,19 @@ async function loadWasmModel() {
 }
 
 async function transcribe(message: Extract<InboundMessage, { type: "transcribe" }>) {
+  if (transcriptionSettings.modelId === NEMOTRON_MODEL_ID) {
+    const recognizer = (nemotronTranscriber ?? await load()) as NemotronBrowserASR;
+    const { logMelSpectrogram } = await import("./nemotron/audio");
+    const audio = message.sampleRate === 16000 ? message.audio : resampleLinear(message.audio, message.sampleRate, 16000);
+    const text = await recognizer.transcribe(logMelSpectrogram(audio), 101, ({ text }) => {
+      postMessage({ type: "partial", text });
+    });
+    postMessage({ type: "partial", text: "" });
+    postMessage({ type: "segment", text: text.trim(), startsNewParagraph: message.startsNewParagraph,
+      words: chunkTiming(text, message.offsetSeconds, audio.length / 16000) });
+    return;
+  }
+
   if (isMoonshineModelId(transcriptionSettings.modelId)) {
     await transcribeWithMoonshine(message);
     return;
@@ -300,20 +340,24 @@ async function transcribe(message: Extract<InboundMessage, { type: "transcribe" 
 
   const result = await withTimeout(
     recognizer(audio, {
-      ...getGenerationOptions(),
-      ...getChunkingOptions(durationSeconds),
-      return_timestamps: "word"
+      ...(transcriptionSettings.modelId === PARAKEET_MODEL_ID ? {} : {
+        ...getGenerationOptions(),
+        ...getChunkingOptions(durationSeconds),
+        return_timestamps: "word" as const
+      })
     }),
     TRANSCRIPTION_TIMEOUT_MS,
-    `Whisper did not finish a ${durationSeconds.toFixed(1)}s audio chunk within ${Math.round(
+    `The transcription model did not finish a ${durationSeconds.toFixed(1)}s audio chunk within ${Math.round(
       TRANSCRIPTION_TIMEOUT_MS / 1000
-    )} seconds. Try a smaller Whisper model or a shorter media file.`
+    )} seconds. Try a smaller model or a shorter media file.`
   );
 
   const output = result as AutomaticSpeechRecognitionOutput | AutomaticSpeechRecognitionOutput[];
   const segments = Array.isArray(output) ? output : [output];
   const text = segments.map((item) => item.text).join(" ").trim();
-  const words = segments.flatMap((item) => toTranscriptWords(item, message.offsetSeconds));
+  const words = transcriptionSettings.modelId === PARAKEET_MODEL_ID
+    ? chunkTiming(text, message.offsetSeconds, durationSeconds)
+    : segments.flatMap((item) => toTranscriptWords(item, message.offsetSeconds));
   postMessage({ type: "segment", text, startsNewParagraph: message.startsNewParagraph, words });
 }
 
@@ -454,7 +498,7 @@ async function collectWasmSegments(
 
 function describeProgress(event: unknown) {
   if (!event || typeof event !== "object") {
-    return { message: "Loading Whisper model...", progress: overallProgress };
+    return { message: "Loading transcription model...", progress: overallProgress };
   }
 
   const record = event as Record<string, unknown>;
@@ -462,7 +506,7 @@ function describeProgress(event: unknown) {
 
   if (status === "download" || status === "progress" || status === "progress_total") {
     return {
-      message: "Downloading Whisper package...",
+      message: "Downloading transcription model package...",
       progress: overallProgress,
       loadedBytes: downloadTracker?.getLoadedBytes(),
       totalBytes: downloadTracker?.getTotalBytes(),
@@ -472,7 +516,7 @@ function describeProgress(event: unknown) {
 
   if (status === "done") {
     return {
-      message: "Finalizing Whisper model...",
+      message: "Finalizing transcription model...",
       progress: overallProgress,
       loadedBytes: downloadTracker?.getLoadedBytes(),
       totalBytes: downloadTracker?.getTotalBytes(),
@@ -480,7 +524,7 @@ function describeProgress(event: unknown) {
     };
   }
 
-  return { message: "Loading Whisper model...", progress: overallProgress };
+  return { message: "Loading transcription model...", progress: overallProgress };
 }
 
 function getGenerationOptions() {
@@ -519,6 +563,13 @@ function reportError(cause: unknown) {
 async function postCacheStatus() {
   try {
     const modelId = transcriptionSettings.modelId;
+    if (modelId === NEMOTRON_MODEL_ID) {
+      const { inspectNemotronCache } = await import("./nemotron/modelAssets");
+      const status = await inspectNemotronCache();
+      overallProgress = status.cached ? 100 : 0;
+      postCacheStatusMessage(status);
+      return;
+    }
     if (isMoonshineModelId(modelId)) {
       const status = await inspectMoonshineCacheStatus(modelId);
       overallProgress = status.cached ? 100 : 0;
@@ -614,6 +665,11 @@ function formatCatalogStatusMessage(entries: ModelInventoryEntry[]) {
     return `1 model is available offline in ${storageLabel}.`;
   }
   return `${availableOffline} models are available offline in ${storageLabel}.`;
+}
+
+function chunkTiming(text: string, offsetSeconds: number, durationSeconds: number): TranscriptWord[] {
+  return text.trim() ? [{ text: text.trim(), startMs: Math.max(0, Math.round(offsetSeconds * 1000)),
+    endMs: Math.max(0, Math.round((offsetSeconds + durationSeconds) * 1000)) }] : [];
 }
 
 function toTranscriptWords(output: AutomaticSpeechRecognitionOutput, offsetSeconds: number): TranscriptWord[] {
@@ -735,11 +791,10 @@ function isTrackedRemoteModelUrl(url: string) {
   return url.startsWith(`${remotePrefix}${expectedModelPath}`);
 }
 
-function getPipelineOptions() {
-  return {
-    ...PIPELINE_OPTIONS,
-    device: transcriptionSettings.device
-  } as const;
+function getPipelineOptions(modelId: string = transcriptionSettings.modelId) {
+  return modelId === PARAKEET_MODEL_ID
+    ? { dtype: "q8" as const, device: transcriptionSettings.device }
+    : { ...PIPELINE_OPTIONS, device: transcriptionSettings.device };
 }
 
 function applyTranscriptionSettings(nextSettings: AppSettings["transcription"]) {
@@ -749,6 +804,8 @@ function applyTranscriptionSettings(nextSettings: AppSettings["transcription"]) 
 
   transcriptionSettings = { ...nextSettings };
   transcriber = null;
+  void nemotronTranscriber?.close();
+  nemotronTranscriber = null;
   wasmTranscriber = null;
   moonshineStream?.close();
   moonshineStream = null;
@@ -809,7 +866,7 @@ function fetchWithXhr(request: Request) {
         updateDownloadRateTracking();
         postMessage({
           type: "progress",
-          message: "Downloading Whisper package...",
+          message: "Downloading transcription model package...",
           progress: overallProgress,
           loadedBytes: downloadTracker?.getLoadedBytes(),
           totalBytes: downloadTracker?.getTotalBytes(),
@@ -860,6 +917,10 @@ function fetchWithXhr(request: Request) {
 }
 
 async function inspectModelInventory(modelId: AppSettings["transcription"]["modelId"]): Promise<ModelInventoryEntry> {
+  if (modelId === NEMOTRON_MODEL_ID) {
+    const { inspectNemotronCache } = await import("./nemotron/modelAssets");
+    return { modelId, ...await inspectNemotronCache() };
+  }
   if (isMoonshineModelId(modelId)) {
     const status = await inspectMoonshineCacheStatus(modelId);
     return {
@@ -896,10 +957,7 @@ async function inspectModelInventory(modelId: AppSettings["transcription"]["mode
 }
 
 async function inspectOnnxModelInventory(modelId: string) {
-  const pipelineOptions = {
-    ...PIPELINE_OPTIONS,
-    device: transcriptionSettings.device
-  } as const;
+  const pipelineOptions = getPipelineOptions(modelId);
   const [status, manifest] = await Promise.all([
     ModelRegistry.is_pipeline_cached_files(TASK, modelId, pipelineOptions),
     getOnnxModelManifest(modelId)
@@ -925,10 +983,7 @@ function getOnnxModelManifest(modelId: string) {
   if (existing) return existing;
 
   const promise = (async () => {
-    const pipelineOptions = {
-      ...PIPELINE_OPTIONS,
-      device: transcriptionSettings.device
-    } as const;
+    const pipelineOptions = getPipelineOptions(modelId);
     const files = await ModelRegistry.get_pipeline_files(TASK, modelId, pipelineOptions);
     const fileMetadata = await Promise.all(
       files.map(async (file) => {

@@ -9,7 +9,9 @@ export type TtsProvider = "web-speech" | "woof" | "supertonic-web";
 export type RecordingExportFormat = "native" | "ogg-vorbis" | "ogg-opus" | "mp3" | "flac" | "wav";
 export type SentencePlaybackMode = "tts" | "source-audio";
 import { defaultTypeface } from "./typefaces";
+export type NemotronModelId = "nemotron:streaming-0.6b-int4";
 export type OnnxTranscriptionModelId =
+  | "onnx-community/parakeet-ctc-0.6b-ONNX"
   | "onnx-community/whisper-tiny.en_timestamped"
   | "onnx-community/whisper-base.en_timestamped"
   | "onnx-community/whisper-small.en_timestamped"
@@ -40,7 +42,7 @@ export type MoonshineModelId =
   | "moonshine:tiny-streaming-en"
   | "moonshine:small-streaming-en"
   | "moonshine:medium-streaming-en";
-export type TranscriptionModelId = OnnxTranscriptionModelId | WasmTranscriptionModelId | MoonshineModelId;
+export type TranscriptionModelId = OnnxTranscriptionModelId | WasmTranscriptionModelId | MoonshineModelId | NemotronModelId;
 
 export type WoofVoiceId = "juno" | "mira";
 
@@ -277,4 +279,8 @@ export function isMoonshineModelId(modelId: TranscriptionModelId): modelId is Mo
 
 export function getWasmWhisperModelId(modelId: WasmTranscriptionModelId): WasmWhisperModelId {
   return modelId.slice("wasm:".length) as WasmWhisperModelId;
+}
+
+export function isNemotronModelId(modelId: string): modelId is NemotronModelId {
+  return modelId === "nemotron:streaming-0.6b-int4";
 }

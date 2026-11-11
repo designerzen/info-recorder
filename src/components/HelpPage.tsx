@@ -59,7 +59,7 @@ export function HelpPage() {
           <ul>
             <li><strong>No microphone audio?</strong> Allow microphone access in your browser’s site permissions, check your device’s microphone settings, and choose the right microphone in Settings.</li>
             <li><strong>Waiting for text?</strong> Check the status bar. The model may still be downloading or processing audio. Try a smaller model if processing is slow.</li>
-            <li><strong>A browser feature is unavailable?</strong> Try a current Chrome or Edge browser. Whisper ONNX and the Supertonic voices require WebGPU; Moonshine, Whisper WASM and the Underdog Woof voices do not.</li>
+            <li><strong>A browser feature is unavailable?</strong> Try a current Chrome or Edge browser. Whisper ONNX, Parakeet and the Supertonic voices require WebGPU. Nemotron prefers WebGPU and can fall back to WASM; Moonshine, Whisper WASM and the Underdog Woof voices run without WebGPU.</li>
             <li><strong>Words don’t look right?</strong> Reduce background noise, speak clearly, and check that the selected model supports the language you are speaking. Review the transcript before sharing it.</li>
           </ul>
         </section>

@@ -52,7 +52,7 @@ export type TranscriptionModelOption = {
   parameters: string;
   downloadSizeBytes?: number;
   languageSupport: "English only" | "Multilingual";
-  runtime: "WebGPU ONNX" | "WASM GGML" | "Moonshine WASM";
+  runtime: "WebGPU ONNX" | "WASM GGML" | "Moonshine WASM" | "WebGPU / WASM ONNX";
   timestampSupport: "Word timestamps" | "Segment timestamps";
   summary: string;
   whyChoose: string;
@@ -265,6 +265,32 @@ export const transcriptionModelOptions: TranscriptionModelOption[] = [
     summary: "Turbo large-v3 timestamped export for high-quality multilingual transcription with fewer decoder layers than full Large.",
     whyChoose: "Choose this when you want the strongest modern multilingual option in the picker and can tolerate the largest download.",
     caution: "Heaviest selectable option; if model loading fails on your device, use Small or Medium timestamped instead."
+  },
+  {
+    value: "onnx-community/parakeet-ctc-0.6b-ONNX",
+    label: "Parakeet CTC 0.6B",
+    repo: "onnx-community/parakeet-ctc-0.6b-ONNX",
+    parameters: "600M params · int8",
+    downloadSizeBytes: 612281932,
+    languageSupport: "English only",
+    runtime: "WebGPU ONNX",
+    timestampSupport: "Segment timestamps",
+    summary: "NVIDIA Parakeet CTC for on-device English speech recognition.",
+    whyChoose: "Choose this for an alternative to Whisper with non-autoregressive decoding.",
+    caution: "Large download. Timing covers each audio chunk; individual words are not aligned. CC BY 4.0 model by NVIDIA."
+  },
+  {
+    value: "nemotron:streaming-0.6b-int4",
+    label: "Nemotron 3.5 ASR 0.6B",
+    repo: "onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4",
+    parameters: "600M params · int4",
+    downloadSizeBytes: 791032783,
+    languageSupport: "English only",
+    runtime: "WebGPU / WASM ONNX",
+    timestampSupport: "Segment timestamps",
+    summary: "NVIDIA Nemotron 3.5 streaming ASR, configured for English transcription.",
+    whyChoose: "Choose this for a quantized alternative with a cache-aware streaming encoder.",
+    caution: "Large first download and high memory use. Audio chunks are decoded independently; timing covers chunks, not aligned words. NVIDIA Open Model License."
   },
   ...createWasmModelOptions()
 ];
